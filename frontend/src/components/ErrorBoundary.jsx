@@ -92,8 +92,8 @@ export default class ErrorBoundary extends Component {
             An unexpected error occurred. Our team has been notified. You can try refreshing or navigating back to the dashboard.
           </p>
 
-          {/* Error details in dev mode */}
-          {isDev && this.state.error && (
+          {/* Error details */}
+          {this.state.error && (
             <div
               style={{
                 background: '#0B0F1A',
@@ -107,7 +107,7 @@ export default class ErrorBoundary extends Component {
               }}
             >
               <p style={{ color: '#EF4444', fontSize: '12px', fontFamily: 'monospace', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {this.state.error.toString()}
+                {this.state.error.stack || this.state.error.toString()}
               </p>
             </div>
           )}
