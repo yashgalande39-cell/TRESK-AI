@@ -248,6 +248,21 @@ const executePistonCode = async (code, language, testCases = [], funcName = 'sol
 
       const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
 
+      // Parse input string safely to an array of arguments
+      let __inputs;
+      try {
+        const pSandbox = { Math, Array, Object, String, Number, Boolean, Date, RegExp, Map, Set, JSON };
+        const pContext = vm.createContext(pSandbox);
+        const parsed = vm.runInContext(`[${inputStr}]`, pContext);
+        if (Array.isArray(parsed)) {
+          __inputs = parsed;
+        } else {
+          __inputs = [inputStr];
+        }
+      } catch (e) {
+        __inputs = [inputStr];
+      }
+
       const logs = [];
       const customConsole = {
         log: (...args) => {
@@ -258,12 +273,12 @@ const executePistonCode = async (code, language, testCases = [], funcName = 'sol
       const sandbox = {
         console: customConsole,
         Math, Array, Object, String, Number, Boolean, Date, RegExp, Map, Set, JSON,
+        __inputs,
       };
 
       const context = vm.createContext(sandbox);
       const runCode = `
 ${code}
-const __inputs = ${inputStr};
 const __result = ${funcName}(...__inputs);
 __result;
       `;
