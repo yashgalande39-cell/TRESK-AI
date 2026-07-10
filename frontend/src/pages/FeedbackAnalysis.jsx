@@ -257,7 +257,7 @@ export default function FeedbackAnalysis() {
 
   // 2. History overview main view
   if (!sessionId) {
-    const completedInterviews = history.filter(h => h.status === 'completed' || h.scoreCard);
+    const completedInterviews = history.filter(h => h.status === 'completed' && h.scoreCard);
     const totalSessions = completedInterviews.length;
 
     let avgOverall = 0;

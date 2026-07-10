@@ -140,10 +140,10 @@ export default function Dashboard() {
 
   const history = useMemo(() => historyData?.history || [], [historyData]);
   const resumes = useMemo(() => resumesData?.resumes || [], [resumesData]);
-  const readinessReport = readinessData || null;
+  const readinessReport = readinessData?.data || null;
 
   const readinessScore = useMemo(() => {
-    const completed = history.filter(h => h.status === 'completed' || h.scoreCard);
+    const completed = history.filter(h => h.status === 'completed' && h.scoreCard);
     if (completed.length === 0) {
       return 0;
     }
@@ -163,7 +163,7 @@ export default function Dashboard() {
 
   const loading = historyLoading || resumesLoading || readinessLoading;
 
-  const completed = history.filter(h => h.status === 'completed' || h.scoreCard);
+  const completed = history.filter(h => h.status === 'completed' && h.scoreCard);
   const completedCount = completed.length;
 
   // Calculate solved challenges based on XP
