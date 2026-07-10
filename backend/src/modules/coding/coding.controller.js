@@ -12,8 +12,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { query, withTransaction } = require('../../config/pgDb');
 const { reviewCode } = require('../../services/ai/scoringEngine');
+const { callOpenRouter } = require('../../services/ai/openrouter');
 
 // ── Piston API Language Map ────────────────────────────────────────────────────
 // Maps our language identifiers to Piston's runtime names and versions
@@ -230,38 +232,103 @@ exports.getChallengeById = async (req, res) => {
  * Public API: https://emkc.org/api/v2/piston
  */
 const executePistonCode = async (code, language, testCases = [], funcName = 'solution') => {
+  // ── LOCAL VM RUNNER FOR JAVASCRIPT / TYPESCRIPT ──────────────────────────
+  if (language === 'javascript' || language === 'typescript') {
+    const results = [];
+    let allPassed = true;
+
+    for (let i = 0; i < testCases.length; i++) {
+      const tc = testCases[i];
+      let expected;
+      try {
+        expected = typeof tc.expected === 'string' ? JSON.parse(tc.expected) : tc.expected;
+      } catch (e) {
+        expected = tc.expected;
+      }
+
+      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
+
+      const logs = [];
+      const customConsole = {
+        log: (...args) => {
+          logs.push(args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' '));
+        }
+      };
+
+      const sandbox = {
+        console: customConsole,
+        Math, Array, Object, String, Number, Boolean, Date, RegExp, Map, Set, JSON,
+      };
+
+      const context = vm.createContext(sandbox);
+      const runCode = `
+${code}
+const __inputs = ${inputStr};
+const __result = ${funcName}(...__inputs);
+__result;
+      `;
+
+      const startMs = Date.now();
+      try {
+        const script = new vm.Script(runCode);
+        const actual = script.runInContext(context, { timeout: 2000 });
+        const durationMs = Date.now() - startMs;
+
+        const pass = JSON.stringify(actual) === JSON.stringify(expected);
+        if (!pass) allPassed = false;
+
+        results.push({
+          caseNum: i + 1,
+          input: tc.input,
+          expected: tc.expected,
+          actual: JSON.stringify(actual),
+          status: pass ? 'PASS' : 'FAIL',
+          logs,
+          durationMs,
+        });
+      } catch (err) {
+        const durationMs = Date.now() - startMs;
+        allPassed = false;
+        results.push({
+          caseNum: i + 1,
+          input: tc.input,
+          expected: tc.expected,
+          actual: null,
+          status: 'ERROR',
+          error: err.message,
+          logs,
+          durationMs,
+        });
+      }
+    }
+
+    return { results, allPassed };
+  }
+
+  // ── PISTON RUNNER FOR PYTHON / OTHER LANGUAGES ─────────────────────────────
   const pistonLang = PISTON_LANGUAGES[language];
   if (!pistonLang) {
     throw new Error(`Unsupported language: ${language}`);
   }
 
-  const results = [];
-  let allPassed = true;
+  try {
+    const results = [];
+    let allPassed = true;
 
-  for (let i = 0; i < testCases.length; i++) {
-    const tc = testCases[i];
-    let expected;
-    try {
-      expected = typeof tc.expected === 'string' ? JSON.parse(tc.expected) : tc.expected;
-    } catch (e) {
-      expected = tc.expected;
-    }
+    for (let i = 0; i < testCases.length; i++) {
+      const tc = testCases[i];
+      let expected;
+      try {
+        expected = typeof tc.expected === 'string' ? JSON.parse(tc.expected) : tc.expected;
+      } catch (e) {
+        expected = tc.expected;
+      }
 
-    const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
+      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
 
-    // Build a wrapper that calls the submitted function with the test case inputs
-    let execCode = code;
-    if (language === 'javascript') {
-      execCode = `
-${code}
-
-// Test harness
-const __inputs = ${inputStr};
-const __result = ${funcName}(...__inputs);
-console.log(JSON.stringify(__result));
-`;
-    } else if (language === 'python') {
-      execCode = `
+      let execCode = code;
+      if (language === 'python') {
+        execCode = `
 import json, sys
 ${code}
 
@@ -269,10 +336,8 @@ __inputs = ${inputStr.replace(/null/g, 'None').replace(/true/g, 'True').replace(
 __result = solution(*__inputs)
 print(json.dumps(__result))
 `;
-    }
-    // Other languages use the code as-is (user must handle I/O)
+      }
 
-    try {
       const startMs = Date.now();
       const response = await fetch(`${PISTON_API_URL}/execute`, {
         method:  'POST',
@@ -283,12 +348,12 @@ print(json.dumps(__result))
           files:    [{ name: 'solution', content: execCode }],
           stdin:    '',
           args:     [],
-          run_timeout:     5000,  // 5 second execution limit
-          compile_timeout: 10000, // 10 second compile limit
+          run_timeout:     5000,
+          compile_timeout: 10000,
           compile_memory_limit: -1,
-          run_memory_limit:     256 * 1024 * 1024, // 256 MB
+          run_memory_limit:     256 * 1024 * 1024,
         }),
-        signal: AbortSignal.timeout(15000), // 15s total HTTP timeout
+        signal: AbortSignal.timeout(15000),
       });
       const durationMs = Date.now() - startMs;
 
@@ -329,18 +394,82 @@ print(json.dumps(__result))
         logs:     [],
         durationMs,
       });
-    } catch (err) {
-      allPassed = false;
-      results.push({
-        caseNum: i + 1, input: tc.input, expected: tc.expected,
-        actual: null, status: 'ERROR',
-        error:  err.name === 'TimeoutError' ? 'Code execution timed out (5s limit)' : err.message,
-        logs: [], durationMs: 0
-      });
+    }
+
+    return { results, allPassed };
+  } catch (pistonErr) {
+    console.warn(`[CodingController] Piston run failed (${pistonErr.message}), falling back to AI dry-run sandbox...`);
+
+    // ── LLM DRY-RUN SANDBOX FALLBACK ─────────────────────────────────────────
+    const prompt = `
+You are a sandboxed code execution engine.
+Evaluate the following user code written in ${language} against the provided test cases.
+
+Code to execute:
+\`\`\`${language}
+${code}
+\`\`\`
+
+Function Name: ${funcName}
+
+Test Cases to run:
+${JSON.stringify(testCases, null, 2)}
+
+For each test case:
+1. Parse the input parameters and pass them to the function \`${funcName}\`.
+2. Dry-run/trace the code's execution carefully to determine the actual return value.
+3. Compare the actual return value with the expected output (strictly matching types and values).
+4. If there's a syntax error, runtime crash, or infinite loop in the code, output "status": "ERROR" and specify the error message.
+5. If the actual return matches the expected output, output "status": "PASS".
+6. If the actual return does not match the expected output, output "status": "FAIL".
+
+Response format:
+Provide your response ONLY as a JSON object containing two fields:
+{
+  "allPassed": true/false,
+  "results": [
+    {
+      "caseNum": 1,
+      "input": ...,
+      "expected": ...,
+      "actual": "JSON string of actual result or error trace",
+      "status": "PASS" | "FAIL" | "ERROR",
+      "error": "Error message if status is ERROR, otherwise empty",
+      "logs": ["Optional print statement logs if any"],
+      "durationMs": 10
+    }
+  ]
+}
+Do not write any other explanation or markup outside the JSON.
+`;
+
+    try {
+      const responseText = await callOpenRouter([
+        { role: 'system', content: 'You are an accurate, strict programming runtime sandbox. Output valid JSON only.' },
+        { role: 'user', content: prompt }
+      ]);
+
+      const cleanText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const data = JSON.parse(cleanText);
+      return {
+        results: data.results || [],
+        allPassed: !!data.allPassed
+      };
+    } catch (e) {
+      console.error('[CodingController] LLM Fallback execution failed:', e);
+      const results = testCases.map((tc, idx) => ({
+        caseNum: idx + 1,
+        input: tc.input,
+        expected: tc.expected,
+        actual: null,
+        status: 'ERROR',
+        error: `Execution sandbox failed: ${e.message}`,
+        logs: [],
+        durationMs: 0
+      }));
+      return { results, allPassed: false };
     }
   }
-
-  return { results, allPassed };
 };
 
 /**
