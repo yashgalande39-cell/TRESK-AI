@@ -137,7 +137,7 @@ async function listFlags() {
   }
 }
 
-// Warm up cache at startup
-refreshCache().catch(() => {});
+// Warm up cache at startup (triggered by first middleware request or index.js to prevent migration race condition)
+// refreshCache().catch(() => {});
 
 module.exports = { isEnabled, setFlag, listFlags, flagsMiddleware, refreshCache };
