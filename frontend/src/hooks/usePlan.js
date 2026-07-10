@@ -53,28 +53,15 @@ export const FEATURE_PLAN = {
 };
 
 export function usePlan() {
-  const { plan, selectPlan } = useAuth();
+  const plan = 'teams';
+  const selectPlan = async () => {};
 
-  /**
-   * Returns true if the user's plan meets or exceeds the required plan
-   */
-  const hasAccess = (requiredPlan) => {
-    const userLevel = PLAN_LEVEL[plan] ?? 0;
-    const reqLevel  = PLAN_LEVEL[requiredPlan] ?? 0;
-    return userLevel >= reqLevel;
-  };
+  const hasAccess = () => true;
+  const canUse = () => true;
 
-  /**
-   * Returns true if the user has access to a named feature key
-   */
-  const canUse = (featureKey) => {
-    const required = FEATURE_PLAN[featureKey] ?? 'free';
-    return hasAccess(required);
-  };
-
-  const isFreePlan  = plan === 'free';
-  const isProPlan   = plan === 'pro';
-  const isTeamsPlan = plan === 'teams';
+  const isFreePlan  = false;
+  const isProPlan   = false;
+  const isTeamsPlan = true;
 
   return { plan, hasAccess, canUse, selectPlan, isFreePlan, isProPlan, isTeamsPlan };
 }

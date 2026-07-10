@@ -4,7 +4,7 @@ import { Sparkles, ArrowRight } from "lucide-react";
 import { Magnetic } from "../fx/Magnetic";
 
 const EASE = [0.22, 1, 0.36, 1];
-const links = ["Features", "How It Works", "Pricing", "Testimonials"];
+const links = ["Features", "How It Works", "Testimonials"];
 
 export function LandingNavbar() {
   const [scrolled, setScrolled] = useState(false);

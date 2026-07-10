@@ -191,47 +191,8 @@ const AppLayout = ({ children }) => {
 
           {/* ACCOUNT */}
           {!collapsed && <div className="sidebar-section-label mt-2">Account</div>}
-          <NavItem to="/pricing"  icon={CreditCard} label="Upgrade Plan" isActive={isActive('/pricing')}  collapsed={collapsed} />
           <NavItem to="/settings" icon={Settings2}  label="Settings"     isActive={isActive('/settings')} collapsed={collapsed} />
         </nav>
-
-        {/* Upgrade card / Plan status */}
-        {!collapsed && (
-          <div className="px-3 pb-3">
-            {plan === 'free' ? (
-              <div
-                className="rounded-xl p-4 relative overflow-hidden"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.08))',
-                  border: '1px solid rgba(99,102,241,0.2)',
-                }}
-              >
-                <div className="absolute top-0 right-0 w-20 h-20 rounded-full opacity-30"
-                  style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)', transform: 'translate(30%, -30%)' }}
-                />
-                <Crown size={16} className="text-violet-400 mb-2" />
-                <h4 className="text-white font-semibold text-sm mb-1">Upgrade to Pro</h4>
-                <p className="text-[11px] text-slate-500 mb-3 leading-relaxed">Unlock unlimited interviews, analytics & more.</p>
-                <Link
-                  to="/pricing"
-                  className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg text-white text-xs font-semibold transition-all"
-                  style={{ background: 'var(--grad-primary)', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}
-                >
-                  Upgrade Now <ChevronRight size={12} />
-                </Link>
-              </div>
-            ) : (
-              <div className="rounded-xl p-3 flex items-center gap-2.5"
-                style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.12)' }}>
-                {planMeta.icon && <planMeta.icon size={14} className={planMeta.cls} />}
-                <div className="min-w-0">
-                  <p className={`text-xs font-semibold ${planMeta.cls}`}>{planMeta.label}</p>
-                  <p className="text-[10px] text-slate-600">Active plan</p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* User profile */}
         <div className={`border-t p-3 ${collapsed ? 'flex justify-center' : ''}`} style={{ borderColor: 'var(--border)' }}>
@@ -405,7 +366,7 @@ export default function App() {
             <Route path="/feedback"      element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><FeedbackAnalysis /></PlanGate></AppLayout></ProtectedRoute>} />
             <Route path="/settings"      element={<ProtectedRoute><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             <Route path="/replay"        element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><InterviewReplay /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/pricing"       element={<ProtectedRoute><AppLayout><Pricing /></AppLayout></ProtectedRoute>} />
+            <Route path="/pricing"       element={<Navigate to="/dashboard" replace />} />
 
             {/* Catch-all */}
             <Route path="*" element={<Navigate to="/" replace />} />

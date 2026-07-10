@@ -171,70 +171,8 @@ exports.generateSession = async (req, res) => {
       return res.status(400).json({ message: "Type, difficulty and role are required fields" });
     }
 
-    // Plan Enforcement — server-side (UI PlanGate is just cosmetic)
-    let userPlan = 'free';
-    let dbOffline = false;
-    try {
-      const uResult = await query(
-        'SELECT plan, plan_expires_at FROM users WHERE id = $1',
-        [userId]
-      );
-      const dbUser = uResult.rows[0];
-      userPlan = dbUser?.plan || 'free';
-
-      // Enforce expiry: auto-downgrade if paid plan has lapsed
-      if (userPlan !== 'free' && dbUser?.plan_expires_at) {
-        const expiry = new Date(dbUser.plan_expires_at);
-        if (expiry < new Date()) {
-          await query("UPDATE users SET plan = 'free' WHERE id = $1", [userId]).catch(() => {});
-          userPlan = 'free';
-          console.log(`[Interview] User ${userId} plan expired, downgraded to free.`);
-        }
-      }
-
-      if (userPlan === 'free') {
-        // Free tier: HR only + 5 interviews/month cap
-        if (type.toLowerCase() !== 'hr') {
-          return res.status(403).json({
-            message: 'Free plan allows HR interviews only. Upgrade to Pro for Technical, Behavioral, and Coding interviews.',
-            requiredPlan: 'pro',
-            userPlan,
-            upgradeUrl: '/pricing',
-          });
-        }
-
-        // Check rolling 30-day count
-        const countResult = await query(
-          `SELECT COUNT(*) FROM interview_sessions
-           WHERE user_id = $1 AND started_at >= NOW() - INTERVAL '30 days'`,
-          [userId]
-        );
-        const monthCount = parseInt(countResult.rows[0].count, 10) || 0;
-
-        if (monthCount >= 5) {  // Free plan limit: 5 interviews / 30 days
-          return res.status(403).json({
-            message: 'Free plan limit reached: 5 mock interviews per 30 days. Upgrade to Pro for unlimited interviews.',
-            requiredPlan: 'pro',
-            userPlan,
-            usedThisMonth: monthCount,
-            limit: 5,
-            upgradeUrl: '/pricing',
-          });
-        }
-      }
-    } catch (e) {
-      dbOffline = true;
-      console.warn('[Interview] Database offline during plan enforcement:', e.message);
-    }
-
-    const { IS_DEMO_AUTH, requireDemoMode } = require('../../config/env');
-    if (dbOffline) {
-      if (!IS_DEMO_AUTH) {
-        return res.status(503).json({ message: "Service temporarily unavailable" });
-      }
-      requireDemoMode('interview.planEnforcement');
-      userPlan = 'pro';
-    }
+    // Plan Enforcement — disabled (everything is free & unlocked)
+    let userPlan = 'teams';
 
     // Retrieve resume if attached
     let resumeObj = null;

@@ -94,21 +94,6 @@ const requireRecruiter = requireMinRole('recruiter');
  */
 function requirePlan(plans = ['pro', 'teams']) {
   return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const userPlan = req.user.plan || 'free';
-    if (!plans.includes(userPlan)) {
-      return res.status(403).json({
-        error: 'UPGRADE_REQUIRED',
-        message: `This feature requires a ${plans.join(' or ')} plan.`,
-        required_plans: plans,
-        current_plan: userPlan,
-        upgrade_url: '/pricing',
-      });
-    }
-
     next();
   };
 }

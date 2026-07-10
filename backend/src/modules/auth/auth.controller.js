@@ -100,6 +100,7 @@ const revokeAllSessions = async (userId) => {
 // ── Helper: strip sensitive fields ───────────────────────────────────────────
 const sanitize = (user) => {
   const { password_hash, reset_token, email_verify_token, ...safe } = user;
+  safe.plan = 'teams';
   return safe;
 };
 
@@ -279,7 +280,7 @@ exports.getProfile = async (req, res) => {
         xp: 1250,
         streak: 5,
         badges: ["Novice Prep", "Interview Scholar", "Placement Ready"],
-        plan: "pro",
+        plan: "teams",
         auth_provider: "local",
         last_active: new Date().toISOString()
       };

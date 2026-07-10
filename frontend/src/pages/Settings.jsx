@@ -389,10 +389,6 @@ export default function Settings() {
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">Settings</h2>
             <p className="text-slate-400 text-xs sm:text-sm mt-1">Manage your account, preferences, and application settings.</p>
           </div>
-          {/* Current plan badge */}
-          <span className={`px-3 py-1.5 text-xs font-bold rounded-full border shrink-0 w-fit ${currentPlanMeta.badge}`}>
-            {currentPlanMeta.label}
-          </span>
         </div>
 
         {/* Tab switcher bar */}
@@ -402,9 +398,7 @@ export default function Settings() {
             { id: 'Preferences', icon: SettingsIcon },
             { id: 'Notifications', icon: Bell },
             { id: 'Account', icon: Shield },
-            { id: 'Subscription', icon: CreditCard },
-            { id: 'Privacy & Security', icon: Globe },
-            { id: 'Billing', icon: CreditCard }
+            { id: 'Privacy & Security', icon: Globe }
           ].map((tab) => {
             const isSelected = activeTab === tab.id;
             return (

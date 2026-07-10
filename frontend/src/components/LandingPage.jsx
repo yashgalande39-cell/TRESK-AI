@@ -6,7 +6,6 @@ import { Hero } from './landing/sections/Hero';
 import { Features } from './landing/sections/Features';
 import { LogoCloud } from './landing/sections/LogoCloud';
 import { Testimonials } from './landing/sections/Testimonials';
-import { Pricing } from './landing/sections/Pricing';
 import { FinalCTA, Footer } from './landing/sections/FinalCTA';
 import './landing/landing.css';
 
@@ -30,7 +29,6 @@ export default function LandingPage() {
       <Features />
       <LogoCloud />
       <Testimonials />
-      <Pricing />
       <FinalCTA />
       <Footer />
     </main>
