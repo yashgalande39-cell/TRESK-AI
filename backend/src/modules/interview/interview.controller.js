@@ -422,6 +422,21 @@ exports.submitAnswer = async (req, res) => {
       if (matches) fillerCount += matches.length;
     });
 
+    const isRubbish = (text) => {
+      if (!text) return true;
+      const clean = text.trim().toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+      const words = clean.split(/\s+/).filter(Boolean);
+      if (words.length === 0) return true;
+      if (words.length < 4) {
+        const commonGreetings = ['hi', 'hii', 'hello', 'hey', 'ok', 'okay', 'yes', 'no', 'skip', 'nothing', 'dont know', 'i dont know', 'test', 'demo', 'asdf', 'yo'];
+        const sentence = words.join(' ');
+        if (words.length === 1 || commonGreetings.includes(sentence) || words.every(w => commonGreetings.includes(w))) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     // Evaluate response quality based on length
     let technicalAccuracy = 60;
     if (wordCount > 40) technicalAccuracy = 85;
@@ -432,6 +447,11 @@ exports.submitAnswer = async (req, res) => {
     const fillerDensity = fillerCount / wordCount;
     let fluencyScore = 100 - Math.round(fillerDensity * 150);
     fluencyScore = Math.max(40, Math.min(100, fluencyScore));
+
+    if (isRubbish(answerText)) {
+      technicalAccuracy = 0;
+      fluencyScore = 10;
+    }
 
     // Dynamic Stress Metric
     let speechStress = Math.min(100, Math.max(10, Math.round((fillerCount * 12) + (wpm > 150 || wpm < 85 ? 30 : 10))));

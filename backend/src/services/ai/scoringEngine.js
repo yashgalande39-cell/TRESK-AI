@@ -1,6 +1,36 @@
 const { callOpenRouter, parseJsonResponse } = require('./openrouter');
 const { sanitizePromptInput } = require('../../utils/sanitizePromptInput');
 
+const isRubbishResponse = (text) => {
+  if (!text) return true;
+  const clean = text.trim().toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+  const words = clean.split(/\s+/).filter(Boolean);
+  
+  if (words.length === 0) return true;
+  
+  // Rule 1: Very short response (less than 4 words)
+  if (words.length < 4) {
+    const commonGreetings = ['hi', 'hii', 'hello', 'hey', 'ok', 'okay', 'yes', 'no', 'skip', 'nothing', 'dont know', 'i dont know', 'test', 'demo', 'asdf', 'yo', 'hii software engineer', 'hello interviewer'];
+    const sentence = words.join(' ');
+    if (words.length === 1 || commonGreetings.includes(sentence) || words.every(w => commonGreetings.includes(w))) {
+      return true;
+    }
+  }
+
+  // Rule 2: Repetitive keyboard smash or single character repetition
+  const firstWord = words[0] || '';
+  if (firstWord.length > 15 && !firstWord.includes('-') && !firstWord.includes('_')) {
+    return true; // Keyboard smash like "asdfasdfasdfasdfasdf"
+  }
+  
+  // Rule 3: Single-character loops like "aaaaaa"
+  if (/^(.)\1{4,}$/.test(clean.replace(/\s+/g, ""))) {
+    return true;
+  }
+
+  return false;
+};
+
 /**
  * AI-powered deep evaluation of a candidate's answer.
  * @param {string} question - The interview question asked
@@ -10,6 +40,22 @@ const { sanitizePromptInput } = require('../../utils/sanitizePromptInput');
  * @returns {Promise<object>} Evaluation object containing rubrics, scores, and feedback
  */
 async function evaluateAnswer(question, answer, type, role) {
+  if (isRubbishResponse(answer)) {
+    return {
+      technicalScore: 0,
+      communicationScore: 10,
+      completenessScore: 0,
+      overallScore: 5,
+      strengths: ["None"],
+      improvements: [
+        "Provide a professional, detailed answer instead of brief greetings or irrelevant input.",
+        "Ensure your response is directly relevant to the interview question."
+      ],
+      idealAnswerHints: "An ideal answer should address the question systematically with examples and explanations.",
+      keyMissingPoints: ["Comprehensive response to the question", "Professional explanation and detail"]
+    };
+  }
+
   const safeRole = sanitizePromptInput(role, 100);
   const safeType = sanitizePromptInput(type, 100);
   const safeQuestion = sanitizePromptInput(question, 500);

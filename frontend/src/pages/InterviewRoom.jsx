@@ -76,9 +76,28 @@ export default function InterviewRoom() {
   const recognitionRef = useRef(null);
   const timerIntervalRef = useRef(null);
 
-  // Metric display refs (derived from session scorecards if available)
-  const avgTechnicalRef = session?.scoreCard?.technicalScore ?? 70;
-  const avgCommRef = session?.scoreCard?.communicationScore ?? 70;
+  const [currentTechScore, setCurrentTechScore] = useState(70);
+  const [currentCommScore, setCurrentCommScore] = useState(70);
+
+  useEffect(() => {
+    if (session) {
+      const transcript = session.transcript || [];
+      if (transcript.length > 0) {
+        const lastTurn = transcript[transcript.length - 1];
+        if (lastTurn?.analysis) {
+          setCurrentTechScore(lastTurn.analysis.technicalAccuracy || 70);
+          setCurrentCommScore(lastTurn.analysis.fluencyScore || 70);
+          return;
+        }
+      }
+      if (session.scoreCard?.technicalScore !== undefined) {
+        setCurrentTechScore(session.scoreCard.technicalScore);
+      }
+      if (session.scoreCard?.communicationScore !== undefined) {
+        setCurrentCommScore(session.scoreCard.communicationScore);
+      }
+    }
+  }, [session]);
 
   const boxXRef = useRef(60);
   const boxYRef = useRef(40);
@@ -93,9 +112,37 @@ export default function InterviewRoom() {
           });
           if (res.ok) {
             const data = await res.json();
-            if (data.session) {
+             if (data.session) {
               setSession(data.session);
-              setCurrentQuestion(data.session.questions[0]?.text || "Tell me about yourself, walk me through your technical background, and explain what draws you to this Software Engineer position.");
+              const qIndex = data.session.currentQuestionIndex || 0;
+              setCurrentIndex(qIndex);
+
+              // Restore dialogues transcript history if it exists
+              const transcript = data.session.transcript || [];
+              if (transcript.length > 0) {
+                const restoredDialogues = [];
+                transcript.forEach((t, idx) => {
+                  restoredDialogues.push({
+                    time: `00:${15 + idx * 40}`,
+                    sender: "AI Interviewer",
+                    text: t.question
+                  });
+                  restoredDialogues.push({
+                    time: `00:${35 + idx * 40}`,
+                    sender: "You",
+                    text: t.answer
+                  });
+                });
+                // Add the current question to the dialogue list
+                restoredDialogues.push({
+                  time: `00:${15 + qIndex * 40}`,
+                  sender: "AI Interviewer",
+                  text: data.session.questions[qIndex]?.text || data.session.questions[qIndex]?.question || ""
+                });
+                setDialogues(restoredDialogues);
+              }
+
+              setCurrentQuestion(data.session.questions[qIndex]?.text || "Tell me about yourself, walk me through your technical background, and explain what draws you to this Software Engineer position.");
               setTotalQuestions(data.session.questions.length);
               setLoading(false);
               return;
@@ -523,6 +570,11 @@ export default function InterviewRoom() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Evaluation failed');
 
+      if (data.analysis) {
+        setCurrentTechScore(data.analysis.technicalAccuracy || 70);
+        setCurrentCommScore(data.analysis.fluencyScore || 70);
+      }
+
       // Reset biometric accumulators
       setEyeContactFrames(0);
       setGoodEyeContactFrames(0);
@@ -550,6 +602,20 @@ export default function InterviewRoom() {
       }
     } catch (e) {
       console.warn("Answer evaluated offline inside local simulator:", e.message);
+
+      // Local fallback metrics computation
+      const wordCount = answerText.split(/\s+/).filter(Boolean).length;
+      let mockTech = 75;
+      let mockComm = 80;
+      if (wordCount < 5) {
+        mockTech = 0;
+        mockComm = 10;
+      } else if (wordCount < 15) {
+        mockTech = 45;
+        mockComm = 60;
+      }
+      setCurrentTechScore(mockTech);
+      setCurrentCommScore(mockComm);
       
       // Reset biometric accumulators
       setEyeContactFrames(0);
@@ -561,7 +627,7 @@ export default function InterviewRoom() {
       if (nextIdx >= totalQuestions) {
         handleFinishInterview();
       } else {
-        const nextQ = session.questions[nextIdx]?.text || "Answer the following topic:";
+        const nextQ = session.questions[nextIdx]?.text || session.questions[nextIdx]?.question || "Answer the following topic:";
         setDialogues(prev => [
           ...prev, 
           ...newDialoguePair,
@@ -933,8 +999,8 @@ export default function InterviewRoom() {
               <div className="grid grid-cols-2 gap-4">
                 <MetricRing value={100 - stressLevelPercent} size={76} label="Confidence" color="violet" animate />
                 <MetricRing value={Math.round(goodEyeContactFrames / Math.max(1, eyeContactFrames) * 100)} size={76} label="Eye Contact" color="cyan" animate />
-                <MetricRing value={avgTechnicalRef || 70} size={76} label="Technical" color="blue" animate />
-                <MetricRing value={avgCommRef || 70} size={76} label="Communication" color="emerald" animate />
+                <MetricRing value={currentTechScore} size={76} label="Technical" color="blue" animate />
+                <MetricRing value={currentCommScore} size={76} label="Communication" color="emerald" animate />
               </div>
             </div>
 
