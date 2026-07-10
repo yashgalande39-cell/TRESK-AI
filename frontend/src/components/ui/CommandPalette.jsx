@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Home, Mic, Code2, FileText, BarChart3,
-  Map, Trophy, Settings, Zap, User,
+  Map, Settings, Zap, User,
   Command, ChevronRight
 } from 'lucide-react';
 
@@ -16,7 +16,6 @@ const COMMANDS = [
       { id: 'resume',     label: 'Resume Analyzer',   icon: FileText,  shortcut: 'G R', path: '/resume' },
       { id: 'feedback',   label: 'Analytics',         icon: BarChart3, shortcut: 'G A', path: '/feedback' },
       { id: 'roadmap',    label: 'Learning Roadmap',  icon: Map,       shortcut: 'G L', path: '/roadmap' },
-      { id: 'leaderboard',label: 'Leaderboard',       icon: Trophy,    shortcut: 'G B', path: '/leaderboard' },
       { id: 'settings',   label: 'Settings',          icon: Settings,  shortcut: 'G S', path: '/settings' },
     ]
   },

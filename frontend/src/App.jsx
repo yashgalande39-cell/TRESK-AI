@@ -23,7 +23,6 @@ const ResumeAnalyzer = lazy(() => import('./pages/ResumeAnalyzer'));
 const JobAnalyzer = lazy(() => import('./pages/JobAnalyzer'));
 const AptitudeEngine = lazy(() => import('./pages/AptitudeEngine'));
 const CareerRoadmap = lazy(() => import('./pages/CareerRoadmap'));
-const Leaderboard = lazy(() => import('./pages/Leaderboard'));
 const AdminPanel = lazy(() => import('./pages/AdminPanel'));
 const FeedbackAnalysis = lazy(() => import('./pages/FeedbackAnalysis'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -34,7 +33,7 @@ const TermsOfService = lazy(() => import('./pages/TermsOfService'));
 
 import {
   LayoutDashboard, Mic, Code2, FileText, Briefcase,
-  Trophy, BarChart3, Map, FlaskConical, Settings2,
+  BarChart3, Map, FlaskConical, Settings2,
   Bell, Search, Flame, Moon, Sun, LogOut,
   ChevronLeft, ChevronRight, Sparkles, Command,
   Crown, Shield, Zap, PlayCircle, CreditCard
@@ -126,7 +125,6 @@ const AppLayout = ({ children }) => {
     '/feedback':          'Analytics',
     '/roadmap':           'Learning Roadmap',
     '/aptitude':          'Aptitude Test',
-    '/leaderboard':       'Leaderboard',
     '/settings':          'Settings',
     '/admin':             'Admin Panel',
     '/replay':            'Interview Replay',
@@ -187,7 +185,6 @@ const AppLayout = ({ children }) => {
           <NavItem to="/feedback"    icon={BarChart3}    label="Analytics"         isActive={isActive('/feedback')}    isLocked={plan==='free'} collapsed={collapsed} />
           <NavItem to="/replay"      icon={PlayCircle}   label="Interview Replay"  isActive={isActive('/replay')}      isLocked={plan==='free'} collapsed={collapsed} />
           <NavItem to="/roadmap"     icon={Map}          label="Learning Path"     isActive={isActive('/roadmap')}     isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/leaderboard" icon={Trophy}       label="Leaderboard"       isActive={isActive('/leaderboard')} isLocked={plan==='free'} collapsed={collapsed} />
 
           {/* ACCOUNT */}
           {!collapsed && <div className="sidebar-section-label mt-2">Account</div>}
@@ -361,7 +358,6 @@ export default function App() {
             <Route path="/job-analyzer"  element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><JobAnalyzer /></PlanGate></AppLayout></ProtectedRoute>} />
             <Route path="/aptitude"      element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><AptitudeEngine /></PlanGate></AppLayout></ProtectedRoute>} />
             <Route path="/roadmap"       element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><CareerRoadmap /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/leaderboard"   element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><Leaderboard /></PlanGate></AppLayout></ProtectedRoute>} />
             <Route path="/admin"         element={<ProtectedRoute><AppLayout><AdminPanel /></AppLayout></ProtectedRoute>} />
             <Route path="/feedback"      element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><FeedbackAnalysis /></PlanGate></AppLayout></ProtectedRoute>} />
             <Route path="/settings"      element={<ProtectedRoute><AppLayout><Settings /></AppLayout></ProtectedRoute>} />

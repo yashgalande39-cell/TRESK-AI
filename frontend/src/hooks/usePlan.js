@@ -42,7 +42,6 @@ export const FEATURE_PLAN = {
   jobAnalyzer:            'pro',
   learningRoadmap:        'pro',
   aptitudeTest:           'pro',
-  leaderboard:            'pro',
   priorityFeedback:       'pro',
 
   // Teams features
