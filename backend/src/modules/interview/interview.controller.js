@@ -1043,3 +1043,113 @@ exports.getSession = async (req, res) => {
     return res.status(200).json({ session: mockSession });
   }
 };
+
+/**
+ * Real-time partial answer analysis.
+ * Called after each finalized speech sentence to provide live AI feedback.
+ * Uses a fast rubbish-check first, then AI if needed.
+ */
+exports.analyzePartial = async (req, res) => {
+  try {
+    const { partialAnswer, question, role, type } = req.body;
+
+    if (!partialAnswer || typeof partialAnswer !== 'string') {
+      return res.status(400).json({ message: 'partialAnswer is required' });
+    }
+
+    const text = partialAnswer.trim();
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+    // ── Fast rubbish check (no AI call needed) ────────────────────────────────
+    const isRubbish = (() => {
+      if (!text) return true;
+      const clean = text.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, '');
+      const words = clean.split(/\s+/).filter(Boolean);
+      if (words.length === 0) return true;
+      if (words.length < 4) {
+        const junk = ['hi', 'hii', 'hello', 'hey', 'ok', 'okay', 'yes', 'no', 'skip',
+          'nothing', 'test', 'demo', 'asdf', 'yo', 'idk', 'i dont know'];
+        const sentence = words.join(' ');
+        if (words.length === 1 || junk.includes(sentence) || words.every(w => junk.includes(w))) return true;
+      }
+      const firstWord = words[0] || '';
+      if (firstWord.length > 15 && !firstWord.includes('-') && !firstWord.includes('_')) return true;
+      if (/^(.)\1{4,}$/.test(clean.replace(/\s+/g, ''))) return true;
+      return false;
+    })();
+
+    if (isRubbish) {
+      return res.status(200).json({
+        isRubbish: true,
+        techScore: 0,
+        commScore: 8,
+        feedback: 'Answer is too brief or irrelevant. Please provide a detailed, professional response.',
+        feedbackType: 'error',
+      });
+    }
+
+    // ── Very short but not rubbish — give neutral baseline ────────────────────
+    if (wordCount < 10) {
+      return res.status(200).json({
+        isRubbish: false,
+        techScore: 35,
+        commScore: 40,
+        feedback: 'Getting started — keep elaborating with specific details and examples.',
+        feedbackType: 'warn',
+      });
+    }
+
+    // ── AI evaluation for substantive answers ─────────────────────────────────
+    try {
+      const { evaluateAnswer } = require('../../services/ai/scoringEngine');
+      const evaluation = await evaluateAnswer(
+        question || 'Tell me about your experience.',
+        text,
+        type || 'HR',
+        role || 'Software Engineer'
+      );
+
+      const techScore = evaluation.technicalScore ?? evaluation.technicalAccuracy ?? 70;
+      const commScore = evaluation.communicationScore ?? evaluation.fluencyScore ?? 70;
+      const overall = Math.round((techScore + commScore) / 2);
+
+      let feedbackType = 'good';
+      let feedback = 'Strong answer — keep going with examples.';
+      if (overall < 35) {
+        feedbackType = 'error';
+        feedback = evaluation.improvements?.[0] || 'Needs more depth and technical substance.';
+      } else if (overall < 65) {
+        feedbackType = 'warn';
+        feedback = evaluation.improvements?.[0] || 'Good start — add specific outcomes and metrics.';
+      } else {
+        feedback = evaluation.strengths?.[0]
+          ? `✅ ${evaluation.strengths[0]}`
+          : 'Strong answer — well structured response.';
+      }
+
+      return res.status(200).json({
+        isRubbish: false,
+        techScore,
+        commScore,
+        feedback,
+        feedbackType,
+      });
+    } catch (aiErr) {
+      console.warn('[analyzePartial] AI evaluation failed, using heuristic:', aiErr.message);
+      // Heuristic scoring fallback
+      const wpm = wordCount; // rough proxy
+      const techScore = Math.min(90, Math.max(20, 30 + (wordCount / 3)));
+      const commScore = Math.min(90, Math.max(20, 35 + (wordCount / 4)));
+      return res.status(200).json({
+        isRubbish: false,
+        techScore: Math.round(techScore),
+        commScore: Math.round(commScore),
+        feedback: wordCount > 50 ? 'Detailed response — excellent depth.' : 'Add more specifics and examples.',
+        feedbackType: wordCount > 50 ? 'good' : 'warn',
+      });
+    }
+  } catch (err) {
+    console.error('[analyzePartial] Error:', err.message);
+    return res.status(500).json({ message: 'Analysis failed', error: err.message });
+  }
+};

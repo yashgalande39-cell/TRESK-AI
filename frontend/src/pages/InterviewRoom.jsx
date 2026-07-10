@@ -34,6 +34,10 @@ export default function InterviewRoom() {
   const [answerText, setAnswerText] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [speechTimer, setSpeechTimer] = useState(0);
+  const [liveCaption, setLiveCaption] = useState("");
+  const [aiFeedback, setAiFeedback] = useState(null); // { text, type: 'good'|'warn'|'error' }
+  const aiFeedbackTimerRef = useRef(null);
+  const partialAnalysisDebounceRef = useRef(null);
   
   // Interface options
   const [cameraActive, setCameraActive] = useState(true);
@@ -241,6 +245,40 @@ export default function InterviewRoom() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, telephonyMode]);
 
+  // ── Partial analysis: send finalized sentence to AI for live scoring ──────
+  const triggerPartialAnalysis = (finalizedText, currentQ, sess) => {
+    clearTimeout(partialAnalysisDebounceRef.current);
+    partialAnalysisDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/interviews/analyze-partial`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            partialAnswer: finalizedText,
+            question: currentQ,
+            role: sess?.role || oRole,
+            type: sess?.type || oType,
+          }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Update live scores with animation
+        if (data.techScore !== undefined) setCurrentTechScore(data.techScore);
+        if (data.commScore !== undefined) setCurrentCommScore(data.commScore);
+
+        // Show AI feedback chip
+        if (data.feedback) {
+          setAiFeedback({ text: data.feedback, type: data.feedbackType || 'good' });
+          clearTimeout(aiFeedbackTimerRef.current);
+          aiFeedbackTimerRef.current = setTimeout(() => setAiFeedback(null), 5000);
+        }
+      } catch (e) {
+        // Silent fail — don't disrupt the interview
+      }
+    }, 800); // 800ms debounce — wait for user to finish the sentence
+  };
+
   // Speech Recognition setup (Web Speech API)
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -249,25 +287,54 @@ export default function InterviewRoom() {
       rec.continuous = true;
       rec.interimResults = true;
       rec.lang = 'en-US';
+      rec.maxAlternatives = 1;
 
       rec.onresult = (event) => {
+        let interimTranscript = '';
         let finalTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const t = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
+            finalTranscript += t;
+          } else {
+            interimTranscript += t;
           }
         }
+        // Show interim text in live caption box
+        if (interimTranscript) {
+          setLiveCaption(interimTranscript);
+        }
+        // Finalized sentence: append to answer and trigger AI analysis
         if (finalTranscript) {
-          setAnswerText(prev => prev + ' ' + finalTranscript);
+          setLiveCaption('');
+          setAnswerText(prev => {
+            const updated = (prev + ' ' + finalTranscript).trim();
+            // Trigger AI analysis on the full accumulated answer so far
+            triggerPartialAnalysis(updated, currentQuestion, session);
+            return updated;
+          });
         }
       };
 
+      rec.onerror = (event) => {
+        if (event.error === 'no-speech' || event.error === 'audio-capture') return;
+        console.warn('[SpeechRecognition] Error:', event.error);
+      };
+
+      // Auto-restart: browsers stop recognition after ~60s of silence
       rec.onend = () => {
-        setIsListening(false);
+        setLiveCaption('');
+        // If we're still supposed to be listening, restart immediately
+        if (recognitionRef.current?._shouldListen) {
+          try { rec.start(); } catch (e) { /* already started */ }
+        } else {
+          setIsListening(false);
+        }
       };
 
       recognitionRef.current = rec;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Text-To-Speech: Speak current question aloud
@@ -493,11 +560,15 @@ export default function InterviewRoom() {
     }
 
     if (isListening) {
+      recognitionRef.current._shouldListen = false;
       recognitionRef.current.stop();
+      setLiveCaption('');
       clearInterval(timerIntervalRef.current);
+      setIsListening(false);
     } else {
       setIsListening(true);
-      recognitionRef.current.start();
+      recognitionRef.current._shouldListen = true;
+      try { recognitionRef.current.start(); } catch (e) { /* already started */ }
       setSpeechTimer(0);
       timerIntervalRef.current = setInterval(() => {
         setSpeechTimer(prev => prev + 1);
@@ -959,18 +1030,60 @@ export default function InterviewRoom() {
               </div>
             </div>
 
+            {/* ── Live Captions Panel ── */}
+            {isListening && (
+              <div className="rounded-2xl p-4 transition-all"
+                style={{ background: 'rgba(8,12,24,0.95)', border: '1px solid rgba(139,92,246,0.35)', boxShadow: '0 0 20px rgba(139,92,246,0.12)' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#EF4444' }} />
+                    <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#A78BFA' }}>Live Transcription</span>
+                  </div>
+                  <span className="text-[10px] font-semibold" style={{ color: '#475569' }}>
+                    {speechTimer > 5 ? `${Math.round((answerText.trim().split(/\s+/).filter(Boolean).length / speechTimer) * 60)} WPM` : 'Listening...'}
+                  </span>
+                </div>
+                <div className="min-h-[40px] text-sm leading-relaxed" style={{ color: '#CBD5E1' }}>
+                  {answerText.slice(-200)}
+                  {liveCaption && (
+                    <span style={{ color: '#94A3B8' }}>
+                      {answerText ? ' ' : ''}{liveCaption}
+                      <span className="inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse" style={{ background: '#8B5CF6' }} />
+                    </span>
+                  )}
+                  {!answerText && !liveCaption && (
+                    <span className="text-slate-600 italic">Speak now — your words will appear here...</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Answer Input */}
-            <div className="rounded-2xl p-4" style={{ background: 'rgba(13,18,32,0.9)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <div className="rounded-2xl p-4" style={{ background: 'rgba(13,18,32,0.9)', border: `1px solid ${isListening ? 'rgba(139,92,246,0.4)' : 'rgba(255,255,255,0.07)'}`, transition: 'border-color 0.3s' }}>
               <textarea
                 value={answerText}
                 onChange={e => setAnswerText(e.target.value)}
-                placeholder={isListening ? 'Listening... speak your answer' : 'Type or speak your answer...'}
+                placeholder={isListening ? '🎤 Listening... your speech is being transcribed above' : 'Type your answer here, or press the mic button to speak...'}
                 rows={3}
                 className="glass-input w-full rounded-xl p-3 text-sm resize-none"
-                style={{ borderColor: isListening ? 'rgba(239,68,68,0.4)' : undefined }}
+                style={{ borderColor: isListening ? 'rgba(139,92,246,0.35)' : undefined }}
               />
+
+              {/* AI Feedback Chip */}
+              {aiFeedback && (
+                <div className="flex items-center gap-2 mt-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all animate-fade-in"
+                  style={{
+                    background: aiFeedback.type === 'good' ? 'rgba(16,185,129,0.1)' : aiFeedback.type === 'warn' ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
+                    border: `1px solid ${aiFeedback.type === 'good' ? 'rgba(16,185,129,0.3)' : aiFeedback.type === 'warn' ? 'rgba(245,158,11,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                    color: aiFeedback.type === 'good' ? '#6EE7B7' : aiFeedback.type === 'warn' ? '#FCD34D' : '#FCA5A5',
+                  }}>
+                  <span>{aiFeedback.type === 'good' ? '✅' : aiFeedback.type === 'warn' ? '💡' : '⚠️'}</span>
+                  <span>{aiFeedback.text}</span>
+                </div>
+              )}
+
               <div className="flex items-center justify-between mt-3">
-                <span className="text-xs text-slate-600">{answerText.length} chars</span>
+                <span className="text-xs text-slate-600">{answerText.split(/\s+/).filter(Boolean).length} words</span>
                 <div className="flex items-center gap-2">
                   {currentIndex < totalQuestions - 1 ? (
                     <button onClick={handleAnswerSubmit}
