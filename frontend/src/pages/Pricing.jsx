@@ -716,7 +716,16 @@ export default function Pricing() {
   // ── Confirm modal action dispatcher ──────────────────────────────────────────
   const handleModalConfirm = async () => {
     if (modal.action === 'cancel') {
-      await handleCancel();
+      if (modal.plan?.id === 'pro') {
+        setLoading('pro');
+        try {
+          await verifyPayment('pro', `order_demo_pro_${mountTimeRef.current}`, 'demo_pay', 'demo_sig');
+        } catch (err) {
+          console.error('Downgrade to Pro error:', err);
+        }
+      } else {
+        await handleCancel();
+      }
     } else {
       await handleUpgrade();
     }

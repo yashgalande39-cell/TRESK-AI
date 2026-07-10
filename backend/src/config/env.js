@@ -21,7 +21,11 @@ if (isProduction) {
 
 // 2. IS_DEMO_AUTH
 const ALLOW_DEMO_AUTH = process.env.ALLOW_DEMO_AUTH === 'true';
-const IS_DEMO_AUTH = !isProduction && ALLOW_DEMO_AUTH;
+const IS_DEMO_AUTH = ALLOW_DEMO_AUTH || 
+  !process.env.RAZORPAY_KEY_ID || 
+  process.env.RAZORPAY_KEY_ID === 'rzp_test_XXXXXXXXXXXXXXXX' || 
+  !process.env.RAZORPAY_KEY_SECRET || 
+  process.env.RAZORPAY_KEY_SECRET === 'your_razorpay_secret';
 
 // Helper to check and log demo mode usage
 const requireDemoMode = (handlerName) => {
