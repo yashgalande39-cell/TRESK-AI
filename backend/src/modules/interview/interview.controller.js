@@ -248,9 +248,19 @@ exports.generateSession = async (req, res) => {
       }
       if (questions.length === 0) {
         // Fallback to json questions
-        const fileQuestions = require('../../../data/dsa_questions.json');
-        const filtered = fileQuestions.filter(q => q.difficulty === difficulty);
-        questions = filtered.slice(0, 2);
+        try {
+          const dsaPath = [
+            path.join(__dirname, '../../../data/dsa_questions.json'),
+            path.join(__dirname, '../../data/dsa_questions.json'),
+            path.join(process.cwd(), 'data/dsa_questions.json'),
+            path.join(process.cwd(), 'backend/data/dsa_questions.json'),
+          ].find(p => fs.existsSync(p));
+          if (dsaPath) {
+            const fileQuestions = JSON.parse(fs.readFileSync(dsaPath, 'utf-8'));
+            const filtered = fileQuestions.filter(q => q.difficulty === difficulty);
+            questions = filtered.slice(0, 2);
+          }
+        } catch (_) { /* ignore */ }
       }
     } else {
       const generated = await generateAIQuestions(type, difficulty, role, company, language, resumeText, resumeObj);

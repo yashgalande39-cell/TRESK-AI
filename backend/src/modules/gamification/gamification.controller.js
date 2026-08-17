@@ -19,14 +19,31 @@ const log = {
 
 const APTITUDE_PATH = path.join(__dirname, '../../../data/aptitude_questions.json');
 let fileAptitudePool = [];
-try {
-  if (fs.existsSync(APTITUDE_PATH)) {
-    fileAptitudePool = JSON.parse(fs.readFileSync(APTITUDE_PATH, 'utf-8'));
-    log.info(`[GamificationController] Loaded ${fileAptitudePool.length} aptitude questions from JSON.`);
+
+function getFileAptitudePool() {
+  if (fileAptitudePool.length > 0) return fileAptitudePool;
+  try {
+    const candidates = [
+      APTITUDE_PATH,
+      path.join(__dirname, '../../data/aptitude_questions.json'),
+      path.join(process.cwd(), 'data/aptitude_questions.json'),
+      path.join(process.cwd(), 'backend/data/aptitude_questions.json'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        fileAptitudePool = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        log.info(`[GamificationController] Loaded ${fileAptitudePool.length} aptitude questions from ${p}`);
+        break;
+      }
+    }
+  } catch (err) {
+    log.error({ err }, '[GamificationController] Error loading aptitude questions from file');
   }
-} catch (err) {
-  log.error({ err }, '[GamificationController] Error loading aptitude questions from file');
+  return fileAptitudePool;
 }
+
+getFileAptitudePool();
+
 
 /**
  * Get daily challenges.
@@ -183,8 +200,8 @@ exports.getAptitudeQuestions = async (req, res) => {
       log.warn({ err: e }, 'DB query for aptitude failed');
     }
 
-    if (!dbSuccess) {
-      pool = fileAptitudePool;
+    if (!dbSuccess || pool.length === 0) {
+      pool = getFileAptitudePool();
       if (difficulty && difficulty !== 'All') {
         pool = pool.filter(q => q.difficulty.toLowerCase() === difficulty.toLowerCase());
       }

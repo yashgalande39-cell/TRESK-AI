@@ -43,14 +43,32 @@ const PISTON_API_URL = process.env.PISTON_API_URL || 'https://emkc.org/api/v2/pi
 
 const QUESTIONS_PATH = path.join(__dirname, '../../../data/dsa_questions.json');
 let fileChallenges = [];
-try {
-  if (fs.existsSync(QUESTIONS_PATH)) {
-    fileChallenges = JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf-8'));
-    log.info(`[CodingController] Loaded ${fileChallenges.length} DSA challenges from JSON.`);
+
+function getFileChallenges() {
+  if (fileChallenges.length > 0) return fileChallenges;
+  try {
+    const candidates = [
+      QUESTIONS_PATH,
+      path.join(__dirname, '../../data/dsa_questions.json'),
+      path.join(process.cwd(), 'data/dsa_questions.json'),
+      path.join(process.cwd(), 'backend/data/dsa_questions.json'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        fileChallenges = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        log.info(`[CodingController] Loaded ${fileChallenges.length} DSA challenges from ${p}`);
+        break;
+      }
+    }
+  } catch (err) {
+    log.error({ err }, '[CodingController] Error loading DSA challenges from file');
   }
-} catch (err) {
-  log.error({ err }, '[CodingController] Error loading DSA challenges from file');
+  return fileChallenges;
 }
+
+// Load initially on startup
+getFileChallenges();
+
 
 // Map archetype strings to JavaScript function names
 const ARCHETYPE_FUNCS = {
@@ -111,7 +129,9 @@ exports.getChallenges = async (req, res) => {
           AND ($2 = 'All' OR company = $2)
           AND ($3 = '' OR title ILIKE $3 OR description ILIKE $3)
       `, [difficulty, company, searchVal ? `%${searchVal}%` : '']);
-      total = parseInt(countResult.rows[0].count, 10) || 0;
+      total = (countResult?.rows?.[0] && countResult.rows[0].count !== undefined) 
+        ? parseInt(countResult.rows[0].count, 10) 
+        : 0;
 
       const qResult = await query(`
         SELECT id, type, role, company, difficulty, title, description, tags 
@@ -125,7 +145,7 @@ exports.getChallenges = async (req, res) => {
         LIMIT $4 OFFSET $5
       `, [difficulty, company, searchVal ? `%${searchVal}%` : '', limit, startIndex]);
 
-      dbChallenges = qResult.rows.map(row => ({
+      dbChallenges = (qResult?.rows || []).map(row => ({
         id: row.id,
         title: row.title,
         difficulty: row.difficulty,
@@ -140,11 +160,11 @@ exports.getChallenges = async (req, res) => {
     }
 
     let paginated = [];
-    if (dbSuccess) {
+    if (dbSuccess && dbChallenges.length > 0) {
       paginated = dbChallenges;
     } else {
       // Fallback to JSON file filtering in memory
-      let allChallenges = fileChallenges.map(ch => ({
+      let allChallenges = getFileChallenges().map(ch => ({
         id: ch.id,
         title: ch.title,
         difficulty: ch.difficulty,
@@ -222,7 +242,7 @@ exports.getChallengeById = async (req, res) => {
     }
 
     // Fallback to JSON file
-    const challenge = fileChallenges.find(ch => String(ch.id) === String(challengeId));
+    const challenge = getFileChallenges().find(ch => String(ch.id) === String(challengeId));
     if (!challenge) {
       return res.status(404).json({ message: "Challenge not found" });
     }
@@ -508,7 +528,7 @@ exports.runCode = async (req, res) => {
     const { challengeId, language, code } = req.body;
     
     // Fetch challenge detail
-    let challenge = fileChallenges.find(ch => String(ch.id) === String(challengeId));
+    let challenge = getFileChallenges().find(ch => String(ch.id) === String(challengeId));
     if (!challenge) {
       try {
         const qResult = await query("SELECT * FROM questions WHERE id = $1", [challengeId]);
@@ -558,7 +578,7 @@ exports.submitCode = async (req, res) => {
     const { challengeId, language, code } = req.body;
 
     // Fetch challenge details
-    let challenge = fileChallenges.find(ch => String(ch.id) === String(challengeId));
+    let challenge = getFileChallenges().find(ch => String(ch.id) === String(challengeId));
     if (!challenge) {
       try {
         const qResult = await query("SELECT * FROM questions WHERE id = $1", [challengeId]);
