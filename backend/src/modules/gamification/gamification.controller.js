@@ -9,15 +9,23 @@ const fs = require('fs');
 const path = require('path');
 const { query } = require('../../config/pgDb');
 
+// ── Structured Logger proxy ────────────────────────────────────────────────────────
+const log = {
+  info:  (...a) => (global.logger ? global.logger.info(...a)  : console.log('[INFO]',  ...a)),
+  warn:  (...a) => (global.logger ? global.logger.warn(...a)  : console.warn('[WARN]',  ...a)),
+  error: (...a) => (global.logger ? global.logger.error(...a) : console.error('[ERROR]', ...a)),
+  debug: (...a) => (global.logger ? global.logger.debug?.(...a) : null),
+};
+
 const APTITUDE_PATH = path.join(__dirname, '../../../data/aptitude_questions.json');
 let fileAptitudePool = [];
 try {
   if (fs.existsSync(APTITUDE_PATH)) {
     fileAptitudePool = JSON.parse(fs.readFileSync(APTITUDE_PATH, 'utf-8'));
-    console.log(`[GamificationController] Loaded ${fileAptitudePool.length} aptitude questions from JSON.`);
+    log.info(`[GamificationController] Loaded ${fileAptitudePool.length} aptitude questions from JSON.`);
   }
 } catch (err) {
-  console.error("[GamificationController] Error loading aptitude questions from file:", err);
+  log.error({ err }, '[GamificationController] Error loading aptitude questions from file');
 }
 
 /**
@@ -40,7 +48,7 @@ exports.getChallenges = async (req, res) => {
         tags: row.tags || []
       }));
     } catch (dbErr) {
-      console.warn('DB query for daily challenges failed, falling back to static challenges:', dbErr.message);
+      log.warn({ err: dbErr }, 'DB query for daily challenges failed, falling back to static challenges');
     }
 
     if (challenges.length === 0) {
@@ -53,10 +61,11 @@ exports.getChallenges = async (req, res) => {
 
     return res.status(200).json({ challenges });
   } catch (err) {
-    console.error("Challenges Error:", err);
+    log.error({ err }, 'Challenges Error');
     return res.status(500).json({ message: "Failed to load daily challenges" });
   }
 };
+
 
 /**
  * Complete a daily challenge and award user XP.
@@ -84,7 +93,7 @@ exports.completeChallenge = async (req, res) => {
           );
         }
       } catch (dbErr) {
-        console.warn('DB query/logging for daily challenges failed:', dbErr.message);
+        log.warn({ err: dbErr }, 'DB query/logging for daily challenges failed');
       }
 
       const updateResult = await query("UPDATE users SET xp = xp + $1 WHERE id = $2 RETURNING xp", [xpReward, userId]);
@@ -95,7 +104,7 @@ exports.completeChallenge = async (req, res) => {
       }
     } catch (err) {
       dbOffline = true;
-      console.warn("Database offline during completeChallenge:", err.message);
+      log.warn({ err }, 'Database offline during completeChallenge');
     }
 
     const { IS_DEMO_AUTH, requireDemoMode } = require('../../config/env');
@@ -111,10 +120,11 @@ exports.completeChallenge = async (req, res) => {
       xp: updatedXP
     });
   } catch (err) {
-    console.error("Complete Challenge Error:", err);
+    log.error({ err }, 'Complete Challenge Error');
     return res.status(500).json({ message: "Failed to complete challenge" });
   }
 };
+
 
 /**
  * Fetch aptitude questions.
@@ -170,7 +180,7 @@ exports.getAptitudeQuestions = async (req, res) => {
         dbSuccess = true;
       }
     } catch (e) {
-      console.warn('DB query for aptitude failed:', e.message);
+      log.warn({ err: e }, 'DB query for aptitude failed');
     }
 
     if (!dbSuccess) {
@@ -195,7 +205,8 @@ exports.getAptitudeQuestions = async (req, res) => {
       totalCount: pool.length
     });
   } catch (err) {
-    console.error("Aptitude Fetch Error:", err);
+    log.error({ err }, 'Aptitude Fetch Error');
     return res.status(500).json({ message: "Failed to load aptitude test" });
   }
 };
+

@@ -62,33 +62,11 @@ export default function TermsOfService() {
           </section>
 
           <section>
-            <h2 className="text-xl font-semibold text-white mb-3">2. Subscription Plans and Billing</h2>
-
-            <h3 className="text-base font-medium text-slate-200 mb-2">2.1 Free Plan</h3>
-            <p>The Free plan provides limited access including up to 5 HR mock interviews per 30 days and basic performance reports.</p>
-
-            <h3 className="text-base font-medium text-slate-200 mt-4 mb-2">2.2 Pro Plan (₹499/month)</h3>
-            <p>The Pro plan provides unlimited mock interviews, access to all interview types, coding arena, resume analyzer, and all advanced features.</p>
-
-            <h3 className="text-base font-medium text-slate-200 mt-4 mb-2">2.3 Billing</h3>
-            <ul className="list-disc list-inside space-y-1 ml-2">
-              <li>Payments are processed by Razorpay. By subscribing, you agree to Razorpay's terms of service.</li>
-              <li>Subscriptions are billed monthly or annually in advance.</li>
-              <li>All prices are in Indian Rupees (INR) and inclusive of applicable taxes.</li>
-              <li>Subscription fees are non-refundable except as required by law or as stated in our refund policy.</li>
-            </ul>
-
-            <h3 className="text-base font-medium text-slate-200 mt-4 mb-2">2.4 Cancellation</h3>
+            <h2 className="text-xl font-semibold text-white mb-3">2. 100% Free Platform Access</h2>
             <p>
-              You may cancel your subscription at any time from <Link to="/settings" className="text-violet-400 hover:text-violet-300">Settings</Link>.
-              Cancellation takes effect at the end of your current billing period. You retain access to Pro features until that date.
-            </p>
-
-            <h3 className="text-base font-medium text-slate-200 mt-4 mb-2">2.5 Refunds</h3>
-            <p>
-              We offer a 7-day money-back guarantee for first-time Pro subscribers if you are not satisfied.
-              Contact <a href={`mailto:${CONTACT_EMAIL}`} className="text-violet-400 hover:text-violet-300">{CONTACT_EMAIL}</a> within 7 days of your first payment.
-              Subsequent billing periods are non-refundable.
+              The AI Mock Interview Platform is completely free for all students, developers, and job seekers. 
+              Every user receives full community access to unlimited mock interviews across all rounds (HR, Technical, Behavioral, Aptitude, Coding), 
+              ATS resume scanning, real-time Sarvam AI voice transcription, coding sandboxes, and advanced telemetry analytics at zero cost.
             </p>
           </section>
 

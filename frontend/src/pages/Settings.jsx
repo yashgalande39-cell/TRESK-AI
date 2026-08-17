@@ -9,7 +9,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Settings() {
-  const { user, token, theme, toggleTheme, plan, selectPlan, updateProfile } = useAuth();
+  const { user, token, theme, toggleTheme, updateProfile } = useAuth();
   const mountTimeRef = useRef(0);
 
   useEffect(() => {
@@ -71,9 +71,6 @@ export default function Settings() {
   // Modals state
   const [toastMessage, setToastMessage] = useState(null);
   const [toastType, setToastType] = useState('success'); // 'success' | 'error'
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [selectedUpgradePlan, setSelectedUpgradePlan] = useState('pro');
-  const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
@@ -82,30 +79,6 @@ export default function Settings() {
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [helpQuestion, setHelpQuestion] = useState('');
 
-  // Subscription / billing data from API
-  const [subscriptionData, setSubscriptionData] = useState(null);
-  const [paymentHistory, setPaymentHistory] = useState([]);
-
-  // Fetch subscription details whenever the Subscription or Billing tab is viewed
-  useEffect(() => {
-    if ((activeTab === 'Subscription' || activeTab === 'Billing') && token) {
-      fetch(`${API_BASE}/billing/subscription`, {
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: 'include',
-      })
-        .then(r => r.json())
-        .then(data => setSubscriptionData(data))
-        .catch(() => {});
-
-      fetch(`${API_BASE}/billing/history`, {
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: 'include',
-      })
-        .then(r => r.ok ? r.json() : { payments: [] })
-        .then(data => setPaymentHistory(data.payments || []))
-        .catch(() => {});
-    }
-  }, [activeTab, token]);
 
   const triggerToast = (msg, type = 'success') => {
     setToastMessage(msg);
@@ -247,113 +220,8 @@ export default function Settings() {
     }
   };
 
-  // 9. Upgrade Plan — goes through Razorpay billing flow (same as Pricing page)
-  const handleUpgradePlan = async () => {
-    if (selectedUpgradePlan === 'free') {
-      // Downgrade: just call selectPlan which cancels on backend
-      setUpgradeLoading(true);
-      try {
-        await fetch(`${API_BASE}/billing/cancel`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        });
-        await selectPlan('free');
-        setShowUpgradeModal(false);
-        triggerToast('Subscription cancelled. Moved to Free plan.');
-      } catch {
-        triggerToast('Failed to cancel subscription.', 'error');
-      } finally {
-        setUpgradeLoading(false);
-      }
-      return;
-    }
 
-    setUpgradeLoading(true);
-    try {
-      // 1. Create Razorpay order
-      const orderRes = await fetch(`${API_BASE}/billing/create-order`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        credentials: 'include',
-        body: JSON.stringify({ plan: selectedUpgradePlan }),
-      });
-      const { order, keyId } = await orderRes.json();
-      if (!order) throw new Error('Failed to create order');
 
-      // 2. Demo order (Razorpay keys not configured) — auto verify
-      if (order.demo) {
-        await verifyBillingPayment(selectedUpgradePlan, order.id, 'demo_payment_id', 'demo_signature');
-        return;
-      }
-
-      // 3. Open Razorpay checkout
-      const options = {
-        key: keyId,
-        amount: order.amount,
-        currency: order.currency,
-        name: 'TRESK AI',
-        description: `${selectedUpgradePlan.charAt(0).toUpperCase() + selectedUpgradePlan.slice(1)} Plan`,
-        order_id: order.id,
-        theme: { color: '#6366F1' },
-        handler: async (response) => {
-          await verifyBillingPayment(
-            selectedUpgradePlan,
-            response.razorpay_order_id,
-            response.razorpay_payment_id,
-            response.razorpay_signature
-          );
-        },
-        prefill: { name: user?.name || '', email: user?.email || '' },
-        modal: { ondismiss: () => setUpgradeLoading(false) },
-      };
-      const rzp = new window.Razorpay(options);
-      rzp.open();
-    } catch {
-      // Graceful fallback — simulate in dev
-      await verifyBillingPayment(selectedUpgradePlan, `order_demo_${mountTimeRef.current}`, 'demo_pay', 'demo_sig');
-    }
-  };
-
-  const verifyBillingPayment = async (planId, orderId, paymentId, signature) => {
-    try {
-      const res = await fetch(`${API_BASE}/billing/verify-payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        credentials: 'include',
-        body: JSON.stringify({ plan: planId, orderId, paymentId, signature }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.user) {
-          await selectPlan(planId); // sync plan in context
-        }
-        setShowUpgradeModal(false);
-        const planLabel = planId === 'pro' ? 'Pro' : 'Teams';
-        triggerToast(`🎉 ${planLabel} Plan activated! All premium features unlocked.`);
-        // Refresh subscription data
-        const subRes = await fetch(`${API_BASE}/billing/subscription`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        });
-        if (subRes.ok) setSubscriptionData(await subRes.json());
-      } else {
-        const err = await res.json();
-        triggerToast(err.message || 'Payment verification failed.', 'error');
-      }
-    } catch {
-      triggerToast('Network error during verification.', 'error');
-    } finally {
-      setUpgradeLoading(false);
-    }
-  };
-
-  const planMeta = {
-    free: { label: 'Free Plan', color: 'text-blue-400', badge: 'bg-blue-500/10 text-blue-400 border-blue-500/30' },
-    pro: { label: 'Pro Plan', color: 'text-purple-400', badge: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
-    teams: { label: 'Teams Plan', color: 'text-emerald-400', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-  };
-  const currentPlanMeta = planMeta[plan] || planMeta.free;
 
   const toggleClass = "w-11 h-6 bg-slate-950/60 border border-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500 peer-checked:after:bg-white";
 
@@ -943,86 +811,29 @@ export default function Settings() {
                 </div>
 
                 {/* Current plan highlight */}
-                <div className={`border rounded-2xl p-4 flex items-center justify-between ${
-                  plan === 'free' ? 'border-blue-500/20 bg-blue-500/5' :
-                  plan === 'pro' ? 'border-purple-500/30 bg-purple-500/5' :
-                  'border-emerald-500/30 bg-emerald-500/5'
-                }`}>
+                <div className="border border-indigo-500/30 bg-indigo-500/10 rounded-2xl p-5 flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-slate-500 mb-0.5">Your current plan</p>
-                    <p className={`text-lg font-bold ${currentPlanMeta.color}`}>{currentPlanMeta.label}</p>
+                    <p className="text-xs text-slate-400 mb-0.5">Your Membership Tier</p>
+                    <p className="text-xl font-black text-white">Community Edition (Pro Unlocked)</p>
+                    <p className="text-xs text-emerald-400 font-semibold mt-1">✨ 100% Free Forever — All advanced AI features, voice rounds, and ATS tools included.</p>
                   </div>
-                  <span className={`px-3 py-1 text-xs font-bold rounded-full border ${currentPlanMeta.badge}`}>Active</span>
+                  <span className="px-4 py-1.5 text-xs font-bold rounded-full border border-emerald-500/40 bg-emerald-500/20 text-emerald-300">Active</span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Free Plan */}
-                  <div className={`border rounded-2xl p-5 flex flex-col justify-between relative ${plan === 'free' ? 'border-blue-500/40 bg-blue-500/5' : 'border-white/5 bg-slate-950/40'}`}>
-                    {plan === 'free' && <span className="absolute top-3 right-3 text-[9px] text-blue-450 font-black uppercase tracking-wider">ACTIVE</span>}
-                    <div className="space-y-4">
-                      <div>
-                        <h4 className="text-sm font-extrabold text-white">Free</h4>
-                        <p className="text-xl font-extrabold text-white mt-1">$0<span className="text-xs font-normal text-slate-500">/mo</span></p>
-                      </div>
-                      <ul className="space-y-2 text-xs text-slate-400 font-medium">
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />3 mock rounds/mo</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Basic scorecard</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Generic roadmaps</li>
-                      </ul>
-                    </div>
-                    {plan !== 'free' && (
-                      <button onClick={() => { setSelectedUpgradePlan('free'); setShowUpgradeModal(true); }} className="mt-4 border border-white/5 text-slate-300 text-xs py-2 rounded-xl hover:bg-white/5 transition-colors cursor-pointer font-bold">
-                        Downgrade
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Pro Plan */}
-                  <div className={`border rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden ${plan === 'pro' ? 'border-purple-500/60 bg-purple-500/5' : 'border-purple-500/20 bg-gradient-to-br from-[#1e1b4b]/30 to-[#120b29]/30'}`}>
-                    {plan === 'pro' && <span className="absolute top-3 right-3 text-[9px] text-purple-400 font-black uppercase tracking-wider">ACTIVE</span>}
-                    {plan !== 'pro' && <span className="absolute top-3 right-3 text-[9px] text-purple-400 font-black uppercase tracking-wider animate-pulse">POPULAR</span>}
-                    <div className="space-y-4">
-                      <div>
-                        <h4 className="text-sm font-extrabold text-white">Pro</h4>
-                        <p className="text-xl font-extrabold text-white mt-1">$29<span className="text-xs font-normal text-slate-500">/mo</span></p>
-                      </div>
-                      <ul className="space-y-2 text-xs text-slate-450 font-medium">
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Unlimited interviews</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Advanced analytics</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Resume Hub + Jobs</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-450" />Coding arena</li>
-                      </ul>
-                    </div>
-                    {plan !== 'pro' && (
-                      <button onClick={() => { setSelectedUpgradePlan('pro'); setShowUpgradeModal(true); }} className="mt-4 bg-glow-gradient text-white text-xs font-bold py-2 rounded-xl flex items-center justify-center gap-1 transition-all hover:opacity-90 shadow-md cursor-pointer">
-                        Upgrade to Pro <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Teams Plan */}
-                  <div className={`border rounded-2xl p-5 flex flex-col justify-between relative ${plan === 'teams' ? 'border-emerald-500/60 bg-emerald-500/5' : 'border-white/5 bg-slate-950/40'}`}>
-                    {plan === 'teams' && <span className="absolute top-3 right-3 text-[9px] text-emerald-450 font-black uppercase tracking-wider">ACTIVE</span>}
-                    <div className="space-y-4">
-                      <div>
-                        <h4 className="text-sm font-extrabold text-white">Teams</h4>
-                        <p className="text-xl font-extrabold text-white mt-1">$79<span className="text-xs font-normal text-slate-500">/mo</span></p>
-                      </div>
-                      <ul className="space-y-2 text-xs text-slate-400 font-medium">
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-455" />Everything in Pro</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-455" />Up to 10 members</li>
-                        <li className="flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-emerald-455" />Priority support</li>
-                      </ul>
-                    </div>
-                    {plan !== 'teams' && (
-                      <button onClick={() => { setSelectedUpgradePlan('teams'); setShowUpgradeModal(true); }} className="mt-4 bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold py-2 rounded-xl flex items-center justify-center gap-1 transition-all hover:opacity-90 cursor-pointer">
-                        Upgrade to Teams <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                <div className="border border-white/5 rounded-2xl p-6 bg-slate-950/40 space-y-4">
+                  <h4 className="text-sm font-bold text-white">Included With Your Account</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300 font-medium">
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> Unlimited AI Mock Interviews (All Rounds)</div>
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> Sarvam AI Voice Recognition + VAD</div>
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> Hyper-Personalized Resume Questions</div>
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> Full ATS Resume Builder &amp; Scanner</div>
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> DSA Coding Arena with Code Runner</div>
+                    <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400" /> Full Replays &amp; Biometric Analytics</div>
                   </div>
                 </div>
               </motion.div>
             )}
+
 
             {/* Privacy & Security Panel */}
             {activeTab === 'Privacy & Security' && (
@@ -1078,105 +889,7 @@ export default function Settings() {
               </motion.div>
             )}
 
-            {/* Billing Panel */}
-            {activeTab === 'Billing' && (
-              <motion.div 
-                key="billing-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="bg-slate-900/20 border border-white/5 rounded-3xl p-6 shadow-xl space-y-6"
-              >
-                <div className="flex items-center space-x-3 border-b border-white/5 pb-4">
-                  <div className="w-10 h-10 rounded-xl bg-slate-950/40 border border-white/5 flex items-center justify-center text-emerald-400">
-                    <CreditCard className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-white">Payment & Billing</h3>
-                    <p className="text-xs text-slate-450 font-semibold">Manage your subscription, payment details, and billing history.</p>
-                  </div>
-                </div>
 
-                {/* Active Subscription Summary */}
-                {subscriptionData && (
-                  <div className={`border rounded-2xl p-4 ${
-                    plan === 'free' ? 'border-blue-500/20 bg-blue-500/5' :
-                    plan === 'pro' ? 'border-purple-500/30 bg-purple-500/10' :
-                    'border-emerald-500/30 bg-emerald-500/10'
-                  }`}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Active Plan</p>
-                        <p className={`text-lg font-black mt-0.5 ${currentPlanMeta.color}`}>{subscriptionData.planName || currentPlanMeta.label}</p>
-                      </div>
-                      <span className={`px-3 py-1 text-[10px] font-black rounded-full border ${currentPlanMeta.badge}`}>ACTIVE</span>
-                    </div>
-                    {subscriptionData.expiresAt && plan !== 'free' && (
-                      <p className="text-[11px] text-slate-500 font-semibold">
-                        Renews on: <span className="text-slate-300">{new Date(subscriptionData.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-                      </p>
-                    )}
-                    {subscriptionData.activatedAt && plan !== 'free' && (
-                      <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
-                        Activated: <span className="text-slate-300">{new Date(subscriptionData.activatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-                      </p>
-                    )}
-                    {plan !== 'free' && (
-                      <button
-                        onClick={() => { setSelectedUpgradePlan('free'); setShowUpgradeModal(true); }}
-                        className="mt-3 text-[11px] font-bold text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
-                      >
-                        Cancel subscription →
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {plan === 'free' && (
-                  <div className="text-center py-6">
-                    <div className="w-12 h-12 bg-slate-950 border border-white/5 rounded-full flex items-center justify-center mx-auto mb-3">
-                      <CreditCard className="w-6 h-6 text-slate-500" />
-                    </div>
-                    <p className="text-sm text-white font-bold mb-1">No active subscription</p>
-                    <p className="text-xs text-slate-450 font-semibold mb-4">Upgrade to Pro to unlock unlimited interviews and premium features.</p>
-                    <button onClick={() => { setSelectedUpgradePlan('pro'); setShowUpgradeModal(true); }} className="bg-glow-gradient text-white text-xs font-bold px-5 py-2.5 rounded-xl hover:opacity-90 transition-all cursor-pointer">
-                      Upgrade to Pro — ₹499/mo
-                    </button>
-                  </div>
-                )}
-
-                {/* Payment History */}
-                <div className="space-y-3">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-1">Payment History</h4>
-                  <div className="overflow-x-auto rounded-2xl border border-white/5">
-                    <table className="w-full text-xs text-left text-slate-400">
-                      <thead className="bg-slate-950/60 text-white uppercase font-black text-[9px] border-b border-white/5">
-                        <tr>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3">Plan</th>
-                          <th className="px-4 py-3">Amount</th>
-                          <th className="px-4 py-3 text-right">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5 font-semibold text-[11px]">
-                        {paymentHistory.length > 0 ? paymentHistory.map((p, i) => (
-                          <tr key={i}>
-                            <td className="px-4 py-3">{new Date(p.paid_at || p.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
-                            <td className="px-4 py-3 capitalize text-slate-300">{p.plan}</td>
-                            <td className="px-4 py-3 text-white">₹{((p.amount_paise || 0) / 100).toFixed(0)}</td>
-                            <td className={`px-4 py-3 text-right font-black uppercase text-[10px] ${p.status === 'paid' ? 'text-emerald-400' : 'text-rose-400'}`}>{p.status}</td>
-                          </tr>
-                        )) : (
-                          <tr>
-                            <td colSpan={4} className="px-4 py-6 text-center text-slate-600">No payment records yet.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </motion.div>
-            )}
 
           </AnimatePresence>
         </div>
@@ -1299,56 +1012,6 @@ export default function Settings() {
       {/* --- MODAL DIALOGS --- */}
       <AnimatePresence>
         
-        {/* 1. Upgrade Modal */}
-        {showUpgradeModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#0b0f19] border border-white/5 w-full max-w-md rounded-3xl p-6 relative shadow-2xl space-y-4 text-center"
-            >
-              <button onClick={() => setShowUpgradeModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-              <div className="space-y-2">
-                <div className="w-12 h-12 bg-purple-500/10 border border-purple-500/20 rounded-full flex items-center justify-center mx-auto text-purple-400 animate-pulse">
-                  <Sparkles className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-bold text-white">
-                  {selectedUpgradePlan === 'free' ? 'Downgrade to Free' : `Upgrade to ${selectedUpgradePlan === 'pro' ? 'Pro' : 'Teams'}`}
-                </h3>
-                <p className="text-xs text-slate-400 font-semibold">
-                  {selectedUpgradePlan === 'free' 
-                    ? 'You will lose access to premium features immediately.'
-                    : 'Unlock unlimited mock evaluations, advanced analytics, and priority support.'}
-                </p>
-              </div>
-              <div className="bg-[#131620] border border-white/5 rounded-2xl p-4 flex justify-between items-center text-xs font-bold">
-                <span className="text-white capitalize">{selectedUpgradePlan} Plan</span>
-                <span className="text-white">{selectedUpgradePlan === 'free' ? '$0' : selectedUpgradePlan === 'pro' ? '$29' : '$79'} / month</span>
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => setShowUpgradeModal(false)} className="flex-1 border border-white/5 text-slate-300 hover:bg-white/5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer">
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleUpgradePlan}
-                  disabled={upgradeLoading}
-                  className={`flex-1 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 disabled:opacity-60 transition-all cursor-pointer ${
-                    selectedUpgradePlan === 'free' ? 'bg-red-650 hover:bg-red-600' : 'bg-glow-gradient shadow-md shadow-violet-500/20'
-                  }`}
-                >
-                  {upgradeLoading ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /><span>Processing...</span></>
-                  ) : (
-                    <span>{selectedUpgradePlan === 'free' ? 'Downgrade' : 'Confirm & Activate'}</span>
-                  )}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
 
         {/* 2. Export Data Modal */}
         {showExportModal && (

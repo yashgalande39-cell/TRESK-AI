@@ -23,8 +23,30 @@ export const AuthProvider = ({ children }) => {
   const [initializing, setInitializing] = useState(true);
   const [theme, setTheme]         = useState(localStorage.getItem('theme') || 'dark');
   const [fontSize, setFontSize]   = useState(parseInt(localStorage.getItem('font-size')) || 100);
-  const [plan, setPlan]           = useState('free');
   const refreshAttempted          = useRef(false);
+
+  // ── Synchronize theme to document and localStorage ─────────────────────────
+  useEffect(() => {
+    localStorage.setItem('theme', theme);
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('light');
+      root.classList.remove('dark');
+      root.setAttribute('data-theme', 'light');
+      root.style.colorScheme = 'light';
+    } else {
+      root.classList.add('dark');
+      root.classList.remove('light');
+      root.setAttribute('data-theme', 'dark');
+      root.style.colorScheme = 'dark';
+    }
+  }, [theme]);
+
+  // ── Synchronize font size to document ──────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem('font-size', fontSize.toString());
+    document.documentElement.style.fontSize = `${fontSize}%`;
+  }, [fontSize]);
 
   // ── On mount: try to restore session via refresh token cookie ──────────────
   useEffect(() => {
@@ -56,7 +78,6 @@ export const AuthProvider = ({ children }) => {
             const profileData = await profileRes.json();
             if (profileData.user) {
               setUser(profileData.user);
-              setPlan(profileData.user.plan || 'free');
             }
           }
         }
@@ -100,7 +121,6 @@ export const AuthProvider = ({ children }) => {
     setAccessToken(data.token);
     setToken(data.token);
     setUser(data.user);
-    setPlan(data.user?.plan || 'free');
     return data;
   };
 
@@ -121,7 +141,6 @@ export const AuthProvider = ({ children }) => {
     setAccessToken(data.token);
     setToken(data.token);
     setUser(data.user);
-    setPlan(data.user?.plan || 'free');
     return data;
   };
 
@@ -161,7 +180,6 @@ export const AuthProvider = ({ children }) => {
     setAccessToken(data.token);
     setToken(data.token);
     setUser(data.user);
-    setPlan(data.user?.plan || 'free');
     return data;
   };
 
@@ -177,12 +195,10 @@ export const AuthProvider = ({ children }) => {
     clearAccessToken();
     setToken('');
     setUser(null);
-    setPlan('free');
     queryClient.clear();
     // Remove any legacy localStorage remnants
     localStorage.removeItem('token');
     localStorage.removeItem('user_cache');
-    localStorage.removeItem('user_plan');
   };
 
   // ── Update XP ───────────────────────────────────────────────────────────────
@@ -213,25 +229,11 @@ export const AuthProvider = ({ children }) => {
     return { success: true, user: data.user };
   };
 
-  // ── Update user locally (e.g. after billing change) ─────────────────────────
+  // ── Update user locally (e.g. after settings change) ───────────────────────────
   const updateUser = (updatedUser) => {
     setUser(updatedUser);
-    if (updatedUser?.plan) setPlan(updatedUser.plan);
   };
 
-  // ── Select Plan (local UI + backend sync) ────────────────────────────────────
-  const selectPlan = async (newPlan) => {
-    const validPlans = ['free', 'pro', 'teams'];
-    if (!validPlans.includes(newPlan)) return;
-
-    setPlan(newPlan);
-    try {
-      const data = await apiPost('/auth/plan', { plan: newPlan });
-      if (data.user) setUser(data.user);
-    } catch (e) {
-      console.warn('[selectPlan] Backend sync failed:', e.message);
-    }
-  };
 
   const toggleTheme       = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   const setAccessibilitySize = (percent) => setFontSize(percent);
@@ -257,8 +259,6 @@ export const AuthProvider = ({ children }) => {
       toggleTheme,
       fontSize,
       setAccessibilitySize,
-      plan,
-      selectPlan,
     }}>
       {children}
     </AuthContext.Provider>

@@ -5,10 +5,14 @@ const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const { globalLimiter, authLimiter, passwordResetLimiter, aiLimiter, uploadLimiter } = require('./middleware/rateLimiter');
 const { Server } = require('socket.io');
+const { createAdapter } = require('@socket.io/redis-adapter');
 const { connectPG, query } = require('./config/pgDb');
+const { createRedisClient, initRedis, closeRedisConnections } = require('./config/redis');
+const { initAIWorker, closeAIWorker } = require('./workers/aiWorker');
+const { closeQueues } = require('./queues/aiQueue');
 const jwt = require('jsonwebtoken');
-const { flagsMiddleware } = require('./config/featureFlags');
 const { promptGuardMiddleware } = require('./services/ai/safetyLayer');
 
 // ── Structured Logger ─────────────────────────────────────────────────────────
@@ -37,15 +41,34 @@ const aiRoutes           = require('./modules/ai/ai.routes');
 const adminRoutes        = require('./modules/admin/admin.routes');
 const analyticsRoutes    = require('./modules/analytics/analytics.routes');
 const treskRoutes        = require('./modules/ai/tresk.routes');
-const billingRoutes      = require('./modules/billing/billing.routes');
 const replayRoutes       = require('./modules/interview/replay.routes');
+const notificationRoutes = require('./modules/notification/notification.routes');
 
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = (typeof CORS_ORIGIN === 'string' ? CORS_ORIGIN : '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes('*')) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (/^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) return true;
+  return false;
+};
+
 // ── Enable CORS (Must be registered first) ─────────────────────────────────────
 app.use(cors({
-  origin: CORS_ORIGIN,
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS policy rejection: Origin ${origin} not allowed`));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'x-timezone'],
   credentials: true,   // Required for httpOnly cookies to be sent cross-origin
@@ -58,48 +81,23 @@ app.use(helmet({
 }));
 
 // ── Global Rate Limiter ────────────────────────────────────────────────────────
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 1000,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 app.use(globalLimiter);
 
 // ── Stricter Auth Limiters ────────────────────────────────────────────────────
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  message: 'Too many attempts, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/auth/login',          authLimiter);
-app.use('/api/auth/register',       authLimiter);
-app.use('/api/auth/forgot-password', authLimiter);
-app.use('/api/auth/refresh',        authLimiter); // Prevent refresh token brute-force
+app.use('/api/auth/login',           authLimiter);
+app.use('/api/auth/register',        authLimiter);
+app.use('/api/auth/google',          authLimiter);
+app.use('/api/auth/forgot-password', passwordResetLimiter);
+app.use('/api/auth/reset-password',  passwordResetLimiter);
+app.use('/api/auth/refresh',         authLimiter); // Prevent refresh token brute-force
 
 // ── AI Limiter ─────────────────────────────────────────────────────────────────
-const aiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60 });
 app.use('/api/ai',    aiLimiter);
 app.use('/api/tresk', aiLimiter);
 
-// ── Billing webhook MUST be registered before express.json() ──────────────────
-// Only the /webhook sub-route needs raw body for HMAC signature verification.
-// All other billing routes (create-order, verify-payment, etc.) need JSON body.
-const billingWebhookRouter = express.Router();
-billingWebhookRouter.post('/webhook',
-  express.raw({ type: 'application/json' }),
-  (req, res, next) => {
-    if (Buffer.isBuffer(req.body)) {
-      req.rawBody = req.body;
-      try { req.body = JSON.parse(req.body.toString('utf-8')); } catch (e) { req.body = {}; }
-    }
-    next();
-  },
-  require('./modules/billing/billing.controller').handleWebhook
-);
-app.use('/api/billing', billingWebhookRouter);
+// ── Upload Limiter ─────────────────────────────────────────────────────────────
+app.use('/api/resumes/upload', uploadLimiter);
+
 
 // ── Cookie Parser (must be before routes that need cookies) ───────────────────────
 app.use(cookieParser());
@@ -108,8 +106,6 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// ── Feature Flags (attached to every request as req.flags) ───────────────────
-app.use(flagsMiddleware());
 
 // ── AI Safety: Prompt Injection Guard on all AI routes ───────────────────────
 app.use('/api/ai',    promptGuardMiddleware(['answer', 'question', 'message', 'query', 'prompt']));
@@ -144,7 +140,9 @@ app.get('/api/status', async (req, res) => {
     await query('SELECT 1');
     dbStatus = 'connected';
   } catch (err) {
-    dbStatus = `disconnected (${err.message})`;
+    // Log full error server-side, but don't expose it to the client
+    logger.warn({ err }, '[status] Database connectivity check failed');
+    dbStatus = 'disconnected';
   }
 
   res.status(200).json({
@@ -168,7 +166,7 @@ app.use('/api/ai',                aiRoutes);
 app.use('/api/admin',             adminRoutes);
 app.use('/api/analytics',         analyticsRoutes);
 app.use('/api/tresk',             treskRoutes);
-app.use('/api/billing',           billingRoutes);  // registered after express.json() for req.body
+app.use('/api/notifications',     notificationRoutes);
 
 // ── Multer Error Handler (file upload validation) ─────────────────────────────
 app.use((err, req, res, next) => {
@@ -178,26 +176,48 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
-// ── Global Error Handler ──────────────────────────────────────────────────────
-app.use((err, req, res, next) => {
-  const status = err.status || err.statusCode || 500;
-  logger.error({ err, path: req.path, method: req.method }, `[${status}] ${err.message}`);
-  res.status(status).json({
-    message: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+// ── 404 Not Found Catch-All for API routes ────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not Found',
+    statusCode: 404,
+    message: `API endpoint '${req.method} ${req.originalUrl}' does not exist.`,
+    why: 'The requested resource URL or HTTP method may be incorrect, moved, or deprecated.',
+    action: 'Please verify the URL path or check the TRESK AI API documentation.',
+    path: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString(),
   });
 });
 
+// ── Global Error Handler ──────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  // Always log full error details server-side (including stack)
+  logger.error({ err, path: req.path, method: req.method }, `[${status}] ${err.message}`);
+  // Never send internal details (stack, raw message) to the client
+  const isClientError = status >= 400 && status < 500;
+  res.status(status).json({
+    error: isClientError ? (err.message || 'Bad Request') : 'Internal Server Error',
+    message: isClientError
+      ? (err.message || 'The request could not be processed.')
+      : 'An unexpected error occurred. Please try again later.',
+  });
+});
+
+
 logger.info('🤖 OpenRouter AI service registered on /api/ai');
 logger.info('🧠 TRESK Career Copilot registered on /api/tresk');
-logger.info('💳 Billing (Razorpay) registered on /api/billing');
 logger.info('📼 Interview Replay registered on /api/interviews/replay');
 logger.info('📈 Analytics Dashboard registered on /api/analytics');
 
 // ── Socket.IO configuration ───────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN,
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) callback(null, true);
+      else callback(new Error('Socket.IO CORS not allowed'));
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -205,6 +225,8 @@ const io = new Server(server, {
   pingTimeout:  60000,
   pingInterval: 25000,
 });
+
+global.io = io;
 
 // Socket.IO Auth Middleware
 io.use((socket, next) => {
@@ -233,6 +255,16 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   logger.debug({ socketId: socket.id }, '🔌 Client connected');
 
+  // Auto-join user-specific notification channel
+  if (socket.user?.userId) {
+    socket.join(`user_${socket.user.userId}`);
+  }
+
+  socket.on('join_session', (sessionId) => {
+    socket.join(`session_${sessionId}`);
+    logger.debug({ socketId: socket.id, sessionId }, '👥 Client joined session channel');
+  });
+
   socket.on('join_room', (roomId) => {
     socket.join(roomId);
     logger.debug({ socketId: socket.id, roomId }, '👤 Client joined room');
@@ -260,28 +292,49 @@ io.on('connection', (socket) => {
   });
 });
 
-// ── Boot Database and Listen ──────────────────────────────────────────────────
+// ── Boot Database, Redis, Queues and Listen ───────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 let httpServer = null;
 
-connectPG()
-  .then(() => {
-    httpServer = server.listen(PORT, () => {
-      logger.info(`🚀 TRESK AI Backend (PostgreSQL) running on http://localhost:${PORT}`);
-    });
-  })
-  .catch((err) => {
+Promise.all([
+  connectPG().catch((err) => {
     logger.error({ err }, '❌ Failed to connect to PostgreSQL');
     logger.info('🔄 Starting in offline mode (DB-dependent endpoints will fail)');
-    httpServer = server.listen(PORT, () => {
-      logger.info(`🚀 TRESK AI Backend (Offline Mode) on http://localhost:${PORT}`);
-    });
+  }),
+  initRedis().then((connected) => {
+    if (connected) {
+      try {
+        const pubClient = createRedisClient();
+        const subClient = createRedisClient();
+        io.adapter(createAdapter(pubClient, subClient));
+        logger.info('🔌 Socket.IO Redis adapter registered for multi-instance clustering');
+      } catch (adapterErr) {
+        logger.warn({ err: adapterErr.message }, '⚠️ Socket.IO using standard in-memory adapter');
+      }
+      initAIWorker(io);
+      logger.info('⚙️ BullMQ AI background worker initialized');
+    }
+  }).catch((err) => {
+    logger.warn({ err: err.message }, 'Redis init skipped, using in-memory fallback');
+  }),
+]).finally(() => {
+  httpServer = server.listen(PORT, () => {
+    logger.info(`🚀 TRESK AI Backend running on http://localhost:${PORT}`);
   });
+});
 
 // ── Graceful Shutdown ─────────────────────────────────────────────────────────
-const shutdown = (signal) => {
+const shutdown = async (signal) => {
   logger.info({ signal }, 'Received shutdown signal. Closing server gracefully...');
+
+  try {
+    await closeAIWorker();
+    await closeQueues();
+    await closeRedisConnections();
+  } catch (cleanErr) {
+    logger.warn({ err: cleanErr.message }, 'Warning during cleanup of Redis/Queues');
+  }
 
   if (httpServer) {
     httpServer.close((err) => {

@@ -17,6 +17,14 @@ const { query, withTransaction } = require('../../config/pgDb');
 const { reviewCode } = require('../../services/ai/scoringEngine');
 const { callOpenRouter } = require('../../services/ai/openrouter');
 
+// ── Structured Logger proxy ────────────────────────────────────────────────────────
+const log = {
+  info:  (...a) => (global.logger ? global.logger.info(...a)  : console.log('[INFO]',  ...a)),
+  warn:  (...a) => (global.logger ? global.logger.warn(...a)  : console.warn('[WARN]',  ...a)),
+  error: (...a) => (global.logger ? global.logger.error(...a) : console.error('[ERROR]', ...a)),
+  debug: (...a) => (global.logger ? global.logger.debug?.(...a) : null),
+};
+
 // ── Piston API Language Map ────────────────────────────────────────────────────
 // Maps our language identifiers to Piston's runtime names and versions
 const PISTON_LANGUAGES = {
@@ -38,10 +46,10 @@ let fileChallenges = [];
 try {
   if (fs.existsSync(QUESTIONS_PATH)) {
     fileChallenges = JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf-8'));
-    console.log(`[CodingController] Loaded ${fileChallenges.length} DSA challenges from JSON.`);
+    log.info(`[CodingController] Loaded ${fileChallenges.length} DSA challenges from JSON.`);
   }
 } catch (err) {
-  console.error("[CodingController] Error loading DSA challenges from file:", err);
+  log.error({ err }, '[CodingController] Error loading DSA challenges from file');
 }
 
 // Map archetype strings to JavaScript function names
@@ -128,7 +136,7 @@ exports.getChallenges = async (req, res) => {
       }));
       dbSuccess = true;
     } catch (dbErr) {
-      console.warn('[CodingController] Failed to query PostgreSQL questions table, falling back to JSON file:', dbErr.message);
+      log.warn({ err: dbErr }, '[CodingController] Failed to query PostgreSQL questions table, falling back to JSON file');
     }
 
     let paginated = [];
@@ -178,10 +186,11 @@ exports.getChallenges = async (req, res) => {
       totalPages: Math.ceil(total / limit)
     });
   } catch (err) {
-    console.error("Error fetching challenges:", err);
+    log.error({ err }, 'Error fetching challenges');
     return res.status(500).json({ message: "Failed to load programming challenges." });
   }
 };
+
 
 /**
  * Fetch challenge details by ID.
@@ -209,7 +218,7 @@ exports.getChallengeById = async (req, res) => {
         });
       }
     } catch (dbErr) {
-      console.warn('[CodingController] DB query error on getChallengeById:', dbErr.message);
+      log.warn({ err: dbErr }, '[CodingController] DB query error on getChallengeById');
     }
 
     // Fallback to JSON file
@@ -219,10 +228,11 @@ exports.getChallengeById = async (req, res) => {
     }
     return res.status(200).json(challenge);
   } catch (err) {
-    console.error("Error fetching challenge details:", err);
-    return res.status(500).json({ message: "Failed to load challenge details." });
+    log.error({ err }, 'Error fetching challenge details');
+    return res.status(500).json({ message: "Challenge not found." });
   }
 };
+
 
 /**
  * Execute code via the Piston API (isolated Docker containers — safe for untrusted code).
@@ -413,7 +423,7 @@ print(json.dumps(__result))
 
     return { results, allPassed };
   } catch (pistonErr) {
-    console.warn(`[CodingController] Piston run failed (${pistonErr.message}), falling back to AI dry-run sandbox...`);
+    log.warn({ err: pistonErr }, '[CodingController] Piston run failed, falling back to AI dry-run sandbox');
 
     // ── LLM DRY-RUN SANDBOX FALLBACK ─────────────────────────────────────────
     const prompt = `
@@ -470,15 +480,17 @@ Do not write any other explanation or markup outside the JSON.
         results: data.results || [],
         allPassed: !!data.allPassed
       };
+      // Mask error message to avoid leaking internal paths/stack details
+      const errorMsg = e.code === 'ECONNREFUSED' ? 'AI sandbox unavailable' : 'Code execution failed';
     } catch (e) {
-      console.error('[CodingController] LLM Fallback execution failed:', e);
+      log.error({ err: e }, '[CodingController] LLM Fallback execution failed');
       const results = testCases.map((tc, idx) => ({
         caseNum: idx + 1,
         input: tc.input,
         expected: tc.expected,
         actual: null,
         status: 'ERROR',
-        error: `Execution sandbox failed: ${e.message}`,
+        error: 'Code execution failed.',
         logs: [],
         durationMs: 0
       }));
@@ -486,6 +498,7 @@ Do not write any other explanation or markup outside the JSON.
     }
   }
 };
+
 
 /**
  * Run code (dry run without committing to DB).
@@ -509,7 +522,7 @@ exports.runCode = async (req, res) => {
           };
         }
       } catch (dbErr) {
-        console.warn('DB query in runCode failed:', dbErr.message);
+        log.warn({ err: dbErr }, 'DB query in runCode failed');
       }
     }
 
@@ -530,10 +543,11 @@ exports.runCode = async (req, res) => {
       message: execution.allPassed ? 'All test cases passed!' : 'Some test cases failed.'
     });
   } catch (err) {
-    console.error('Run Code Error:', err);
+    log.error({ err }, 'Run Code Error');
     return res.status(500).json({ message: 'Compilation failure in code runner.' });
   }
 };
+
 
 /**
  * Submit code, award XP, write to DB, trigger AI analysis.
@@ -558,7 +572,7 @@ exports.submitCode = async (req, res) => {
           };
         }
       } catch (dbErr) {
-        console.warn('DB query in submitCode failed:', dbErr.message);
+        log.warn({ err: dbErr }, 'DB query in submitCode failed');
       }
     }
 
@@ -603,7 +617,7 @@ exports.submitCode = async (req, res) => {
         xpAwarded
       ]);
     } catch (dbErr) {
-      console.warn('[CodingController] Database offline, skipping submission persistence:', dbErr.message);
+      log.warn({ err: dbErr }, '[CodingController] Database offline, skipping submission persistence');
     }
 
     // 2. Award XP and update badges if solved successfully
@@ -632,7 +646,7 @@ exports.submitCode = async (req, res) => {
           return null;
         });
       } catch (dbErr) {
-        console.warn('[CodingController] Database offline, skipping XP and badges award in DB:', dbErr.message);
+        log.warn({ err: dbErr }, '[CodingController] Database offline, skipping XP and badges award in DB');
         userProfile = {
           id: userId,
           xp: 1200,
@@ -651,9 +665,9 @@ exports.submitCode = async (req, res) => {
         challenge.description || '',
         success
       );
-      console.log(`✅ AI code review completed. Rating: ${aiReview?.overallRating || 'N/A'}/10`);
+      log.info(`AI code review completed. Rating: ${aiReview?.overallRating || 'N/A'}/10`);
     } catch (reviewErr) {
-      console.warn('AI code review unavailable:', reviewErr.message);
+      log.warn({ err: reviewErr }, 'AI code review unavailable');
     }
 
     // Return response
@@ -668,7 +682,8 @@ exports.submitCode = async (req, res) => {
       user: userProfile
     });
   } catch (err) {
-    console.error("Submit Code Error:", err);
+    log.error({ err }, 'Submit Code Error');
     return res.status(500).json({ message: "Failed to submit challenge answer." });
   }
 };
+

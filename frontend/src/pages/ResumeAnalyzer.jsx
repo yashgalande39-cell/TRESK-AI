@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { usePlan } from '../hooks/usePlan';
 import { API_BASE } from '../config';
 import { 
   Plus, Trash2, UploadCloud, CheckCircle, 
@@ -14,7 +13,6 @@ import MetricRing from '../components/ui/MetricRing';
 
 export default function ResumeAnalyzer() {
   const { token, updateXp } = useAuth();
-  const { isFreePlan } = usePlan();
 
   // Tab State: 'builder' or 'jobs'
   const [activeTab, setActiveTab] = useState('builder');
@@ -254,20 +252,7 @@ export default function ResumeAnalyzer() {
   return (
     <div className="space-y-6 pt-2 pb-12 w-full text-left">
       
-      {/* Free Plan Banner */}
-      {isFreePlan && (
-        <div className="upgrade-banner rounded-2xl flex gap-3 items-center" style={{
-          background: 'linear-gradient(135deg, rgba(239,68,68,0.1), rgba(139,92,246,0.05))',
-          border: '1px solid rgba(139,92,246,0.2)'
-        }}>
-          <span className="upgrade-banner-icon text-lg">✨</span>
-          <div className="text-sm">
-            <strong className="text-white">Pro Feature:</strong> Resume ATS Builder &amp; Job Matcher require a Pro plan.{' '}
-            <Link to="/pricing" className="text-indigo-400 hover:text-indigo-300 font-semibold underline transition-colors">Upgrade to Pro</Link>
-            {' '}to unlock full resume analysis, ATS scoring, and job matching.
-          </div>
-        </div>
-      )}
+
       
       {/* Dynamic Style Injection for standard high-fidelity prints */}
       <style dangerouslySetInnerHTML={{__html: `

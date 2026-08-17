@@ -1,15 +1,12 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { usePlan } from './hooks/usePlan';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
 
 // UI Components
 import CommandPalette from './components/ui/CommandPalette';
 import NotificationPanel from './components/NotificationPanel';
 
-// Global Components
-import { PlanGate } from './components/PlanGate';
 
 // Pages (Landing page static, others lazy loaded)
 import LandingPage from './components/LandingPage';
@@ -27,16 +24,17 @@ const AdminPanel = lazy(() => import('./pages/AdminPanel'));
 const FeedbackAnalysis = lazy(() => import('./pages/FeedbackAnalysis'));
 const Settings = lazy(() => import('./pages/Settings'));
 const InterviewReplay = lazy(() => import('./pages/InterviewReplay'));
-const Pricing = lazy(() => import('./pages/Pricing'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 const TermsOfService = lazy(() => import('./pages/TermsOfService'));
+const NotFound = lazy(() => import('./pages/NotFound'));
+
 
 import {
   LayoutDashboard, Mic, Code2, FileText, Briefcase,
   BarChart3, Map, FlaskConical, Settings2,
   Bell, Search, Flame, Moon, Sun, LogOut,
   ChevronLeft, ChevronRight, Sparkles, Command,
-  Crown, Shield, Zap, PlayCircle, CreditCard
+  PlayCircle, PanelLeft, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 
 // ── Route Guards ────────────────────────────────────────────
@@ -47,7 +45,7 @@ const ProtectedRoute = ({ children }) => {
 };
 
 // ── Nav Item ─────────────────────────────────────────────────
-function NavItem({ to, icon: Icon, label, isActive, isLocked, collapsed }) {
+function NavItem({ to, icon: Icon, label, isActive, collapsed }) {
   return (
     <Link
       to={to}
@@ -61,16 +59,6 @@ function NavItem({ to, icon: Icon, label, isActive, isLocked, collapsed }) {
       {!collapsed && (
         <span className="sidebar-label flex-1 truncate">{label}</span>
       )}
-      {!collapsed && isLocked && (
-        <span className="ml-auto text-slate-600">
-          <Shield size={11} />
-        </span>
-      )}
-      {collapsed && isLocked && (
-        <span className="absolute -top-1 -right-1 w-3 h-3 flex items-center justify-center bg-slate-800 rounded-full border border-slate-700">
-          <Shield size={7} className="text-slate-600" />
-        </span>
-      )}
     </Link>
   );
 }
@@ -78,30 +66,26 @@ function NavItem({ to, icon: Icon, label, isActive, isLocked, collapsed }) {
 // ── App Layout ────────────────────────────────────────────
 const AppLayout = ({ children }) => {
   const { user, isAuthenticated, logout, theme, toggleTheme } = useAuth();
-  const { plan } = usePlan();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [notifications] = useState(1);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
 
-  const PLAN_META = {
-    free:  { label: 'Free Plan',  icon: null,  cls: 'plan-badge-free' },
-    pro:   { label: 'Pro',        icon: Crown, cls: 'plan-badge-pro' },
-    teams: { label: 'Teams',      icon: Zap,   cls: 'plan-badge-teams' },
-  };
-  const planMeta = PLAN_META[plan] || PLAN_META.free;
-
-  const userName = user?.name || 'Arjun Sharma';
-  const userStreak = user?.streak || 12;
+  const userName = user?.name || 'User';
+  const userStreak = user?.streak ?? 0;
   const userInitials = userName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
 
-  // ⌘K shortcut
+  // ⌘K and ⌘B keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setCmdOpen(o => !o);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setCollapsed(c => !c);
       }
     };
     window.addEventListener('keydown', handler);
@@ -128,9 +112,10 @@ const AppLayout = ({ children }) => {
     '/settings':          'Settings',
     '/admin':             'Admin Panel',
     '/replay':            'Interview Replay',
-    '/pricing':           'Upgrade Plan',
+    '/404':               'Page Not Found',
   };
-  const pageTitle = PAGE_TITLES[location.pathname] || 'Workspace';
+
+  const pageTitle = PAGE_TITLES[location.pathname] || 'Page Not Found';
 
   if (!isAuthenticated) {
     return (
@@ -141,28 +126,44 @@ const AppLayout = ({ children }) => {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden antialiased text-sm" style={{ background: 'var(--bg)', color: '#F1F5F9' }}>
+    <div className="flex h-screen w-screen overflow-hidden antialiased text-sm" style={{ background: 'var(--bg)', color: 'var(--text-primary)' }}>
 
       {/* ── Sidebar ─────────────────────────────────────── */}
       <aside
         className={`sidebar-wrapper h-full flex flex-col z-20 border-r relative transition-all duration-300`}
         style={{
           width: collapsed ? 'var(--sidebar-collapsed-w)' : 'var(--sidebar-w)',
-          background: 'rgba(13,18,32,0.95)',
+          background: 'var(--sidebar-bg)',
           borderColor: 'var(--border)',
           backdropFilter: 'blur(20px)',
         }}
       >
-        {/* Logo */}
-        <div className={`flex items-center gap-3 p-4 border-b ${collapsed ? 'justify-center px-2' : ''}`} style={{ borderColor: 'var(--border)' }}>
-          <div className="w-8 h-8 rounded-xl bg-gradient-blue-violet flex items-center justify-center flex-shrink-0 shadow-glow-blue">
-            <Sparkles size={16} className="text-white" />
+        {/* Logo & Header Toggle */}
+        <div className={`flex items-center justify-between p-3.5 border-b h-16 ${collapsed ? 'justify-center px-2' : ''}`} style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={() => collapsed && setCollapsed(false)}
+              className="w-8 h-8 rounded-xl bg-gradient-blue-violet flex items-center justify-center flex-shrink-0 shadow-glow-blue cursor-pointer"
+              title={collapsed ? "Expand sidebar (⌘B)" : undefined}
+            >
+              <Sparkles size={16} className="text-white" />
+            </button>
+            {!collapsed && (
+              <div className="min-w-0">
+                <h1 className="font-bold text-base leading-none tracking-tight text-slate-900 dark:text-white">TRESK<span style={{ color: '#6366F1' }}> AI</span></h1>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 font-medium">Career Copilot</p>
+              </div>
+            )}
           </div>
+
           {!collapsed && (
-            <div className="min-w-0">
-              <h1 className="text-white font-bold text-base leading-none tracking-tight">TRESK<span style={{ color: '#6366F1' }}> AI</span></h1>
-              <p className="text-[10px] text-slate-600 mt-0.5 font-medium">Career Copilot Platform</p>
-            </div>
+            <button
+              onClick={() => setCollapsed(true)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-all cursor-pointer"
+              title="Collapse sidebar (⌘B)"
+            >
+              <PanelLeftClose size={16} />
+            </button>
           )}
         </div>
 
@@ -175,35 +176,44 @@ const AppLayout = ({ children }) => {
 
           {/* PRACTICE */}
           {!collapsed && <div className="sidebar-section-label mt-2">Practice</div>}
-          <NavItem to="/coding"       icon={Code2}        label="Coding Arena"     isActive={isActive('/coding')}       isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/resume"       icon={FileText}     label="Resume Analyzer"  isActive={isActive('/resume')}       isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/job-analyzer" icon={Briefcase}     label="Job Analyzer"     isActive={isActive('/job-analyzer')} isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/aptitude"     icon={FlaskConical} label="Aptitude Test"    isActive={isActive('/aptitude')}     isLocked={plan==='free'} collapsed={collapsed} />
+          <NavItem to="/coding"       icon={Code2}        label="Coding Arena"     isActive={isActive('/coding')}       collapsed={collapsed} />
+          <NavItem to="/resume"       icon={FileText}     label="Resume Analyzer"  isActive={isActive('/resume')}       collapsed={collapsed} />
+          <NavItem to="/job-analyzer" icon={Briefcase}    label="Job Analyzer"     isActive={isActive('/job-analyzer')} collapsed={collapsed} />
+          <NavItem to="/aptitude"     icon={FlaskConical} label="Aptitude Test"    isActive={isActive('/aptitude')}     collapsed={collapsed} />
 
           {/* INTELLIGENCE */}
           {!collapsed && <div className="sidebar-section-label mt-2">Intelligence</div>}
-          <NavItem to="/feedback"    icon={BarChart3}    label="Analytics"         isActive={isActive('/feedback')}    isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/replay"      icon={PlayCircle}   label="Interview Replay"  isActive={isActive('/replay')}      isLocked={plan==='free'} collapsed={collapsed} />
-          <NavItem to="/roadmap"     icon={Map}          label="Learning Path"     isActive={isActive('/roadmap')}     isLocked={plan==='free'} collapsed={collapsed} />
+          <NavItem to="/feedback"  icon={BarChart3}  label="Analytics"        isActive={isActive('/feedback')} collapsed={collapsed} />
+          <NavItem to="/replay"    icon={PlayCircle} label="Interview Replay" isActive={isActive('/replay')}   collapsed={collapsed} />
+          <NavItem to="/roadmap"   icon={Map}        label="Learning Path"    isActive={isActive('/roadmap')}  collapsed={collapsed} />
 
           {/* ACCOUNT */}
           {!collapsed && <div className="sidebar-section-label mt-2">Account</div>}
-          <NavItem to="/settings" icon={Settings2}  label="Settings"     isActive={isActive('/settings')} collapsed={collapsed} />
+          <NavItem to="/settings" icon={Settings2} label="Settings" isActive={isActive('/settings')} collapsed={collapsed} />
         </nav>
 
-        {/* User profile */}
-        <div className={`border-t p-3 ${collapsed ? 'flex justify-center' : ''}`} style={{ borderColor: 'var(--border)' }}>
+        {/* User profile & Bottom expand toggle */}
+        <div className={`border-t p-3 ${collapsed ? 'flex flex-col items-center gap-2' : ''}`} style={{ borderColor: 'var(--border)' }}>
           {collapsed ? (
-            <button
-              onClick={logout}
-              title={`${userName} — Click to logout`}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 hover:opacity-80 transition-opacity"
-              style={{ background: 'var(--grad-primary)' }}
-            >
-              {userInitials}
-            </button>
+            <>
+              <button
+                onClick={logout}
+                title={`${userName} — Click to logout`}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 hover:opacity-80 transition-opacity"
+                style={{ background: 'var(--grad-primary)' }}
+              >
+                {userInitials}
+              </button>
+              <button
+                onClick={() => setCollapsed(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
+                title="Expand sidebar (⌘B)"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </>
           ) : (
-            <div className="flex items-center gap-2.5 group cursor-pointer rounded-xl p-2 transition-colors hover:bg-white/5"
+            <div className="flex items-center gap-2.5 group cursor-pointer rounded-xl p-2 transition-colors hover:bg-slate-100 dark:hover:bg-white/5"
               onClick={logout} title="Click to logout">
               <div
                 className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
@@ -212,23 +222,12 @@ const AppLayout = ({ children }) => {
                 {userInitials}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-white text-sm font-medium truncate leading-none">{userName}</p>
-                <p className={`text-[10px] mt-0.5 ${planMeta.cls}`}>{planMeta.label}</p>
+                <p className="text-slate-900 dark:text-white text-sm font-medium truncate leading-none">{userName}</p>
               </div>
-              <LogOut size={13} className="text-slate-600 group-hover:text-rose-400 transition-colors flex-shrink-0" />
+              <LogOut size={13} className="text-slate-400 dark:text-slate-500 group-hover:text-rose-500 transition-colors flex-shrink-0" />
             </div>
           )}
         </div>
-
-        {/* Collapse toggle */}
-        <button
-          onClick={() => setCollapsed(c => !c)}
-          className="absolute -right-3 top-20 w-6 h-6 rounded-full flex items-center justify-center text-slate-500 hover:text-white transition-all z-10 shadow-md"
-          style={{ background: '#1A2235', border: '1px solid var(--border-2)' }}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-        </button>
       </aside>
 
       {/* ── Main Content ─────────────────────────────── */}
@@ -241,13 +240,25 @@ const AppLayout = ({ children }) => {
 
         {/* Header */}
         <header
-          className="h-16 flex items-center justify-between px-6 flex-shrink-0 border-b"
-          style={{ borderColor: 'var(--border)', background: 'rgba(8,12,20,0.8)', backdropFilter: 'blur(12px)' }}
+          className="h-16 flex items-center justify-between px-6 flex-shrink-0 border-b transition-colors duration-200"
+          style={{ borderColor: 'var(--border)', background: 'var(--header-bg)', backdropFilter: 'blur(12px)' }}
         >
-          {/* Page title */}
-          <div>
-            <h2 className="text-white font-semibold text-base leading-none">{pageTitle}</h2>
-            <p className="text-slate-600 text-xs mt-0.5">InterviewAI Platform</p>
+          {/* Left: Sidebar toggle + Page title */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setCollapsed(c => !c)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 transition-all cursor-pointer"
+              title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+            >
+              {collapsed ? <PanelLeftOpen size={18} className="text-indigo-400" /> : <PanelLeft size={18} />}
+            </button>
+
+            <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800" />
+
+            <div>
+              <h2 className="text-slate-900 dark:text-white font-semibold text-base leading-none">{pageTitle}</h2>
+              <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5 font-medium">InterviewAI Platform</p>
+            </div>
           </div>
 
           {/* Header Actions */}
@@ -280,31 +291,33 @@ const AppLayout = ({ children }) => {
             <div className="relative">
               <button
                 onClick={() => setNotifOpen(o => !o)}
-                className="relative w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-white transition-all"
+                className="relative w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-white transition-all cursor-pointer"
                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)' }}
+                title="Notifications"
               >
                 <Bell size={16} />
-                {notifications > 0 && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-500 border-2 border-bg" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-1.5 right-1.5 min-w-[7px] h-[7px] rounded-full bg-indigo-500 ring-2 ring-[#080C14]" />
                 )}
               </button>
               <NotificationPanel
                 isOpen={notifOpen}
                 onClose={() => setNotifOpen(false)}
                 user={user}
+                onUnreadCountChange={setUnreadNotifications}
               />
             </div>
 
             {/* Theme toggle */}
             <button
               onClick={toggleTheme}
-              className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-white transition-all"
-              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)' }}
-              title="Toggle theme"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer shadow-sm hover:shadow"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             >
               {theme === 'dark'
-                ? <Moon size={16} className="text-indigo-400" />
-                : <Sun size={16} className="text-amber-400" />
+                ? <Sun size={16} className="text-amber-400 animate-pulse-slow" />
+                : <Moon size={16} className="text-indigo-600 animate-pulse-slow" />
               }
             </button>
 
@@ -353,19 +366,20 @@ export default function App() {
             <Route path="/dashboard"     element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
             <Route path="/lobby"         element={<ProtectedRoute><AppLayout><InterviewLobby /></AppLayout></ProtectedRoute>} />
             <Route path="/interview-room"element={<ProtectedRoute><AppLayout><InterviewRoom /></AppLayout></ProtectedRoute>} />
-            <Route path="/coding"        element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><CodingEditor /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/resume"        element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><ResumeAnalyzer /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/job-analyzer"  element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><JobAnalyzer /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/aptitude"      element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><AptitudeEngine /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/roadmap"       element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><CareerRoadmap /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/admin"         element={<ProtectedRoute><AppLayout><AdminPanel /></AppLayout></ProtectedRoute>} />
-            <Route path="/feedback"      element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><FeedbackAnalysis /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/settings"      element={<ProtectedRoute><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
-            <Route path="/replay"        element={<ProtectedRoute><AppLayout><PlanGate requires="pro"><InterviewReplay /></PlanGate></AppLayout></ProtectedRoute>} />
-            <Route path="/pricing"       element={<Navigate to="/dashboard" replace />} />
+            <Route path="/coding"       element={<ProtectedRoute><AppLayout><CodingEditor /></AppLayout></ProtectedRoute>} />
+            <Route path="/resume"       element={<ProtectedRoute><AppLayout><ResumeAnalyzer /></AppLayout></ProtectedRoute>} />
+            <Route path="/job-analyzer" element={<ProtectedRoute><AppLayout><JobAnalyzer /></AppLayout></ProtectedRoute>} />
+            <Route path="/aptitude"     element={<ProtectedRoute><AppLayout><AptitudeEngine /></AppLayout></ProtectedRoute>} />
+            <Route path="/roadmap"      element={<ProtectedRoute><AppLayout><CareerRoadmap /></AppLayout></ProtectedRoute>} />
+            <Route path="/admin"        element={<ProtectedRoute><AppLayout><AdminPanel /></AppLayout></ProtectedRoute>} />
+            <Route path="/feedback"     element={<ProtectedRoute><AppLayout><FeedbackAnalysis /></AppLayout></ProtectedRoute>} />
+            <Route path="/settings"     element={<ProtectedRoute><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
+            <Route path="/replay"       element={<ProtectedRoute><AppLayout><InterviewReplay /></AppLayout></ProtectedRoute>} />
+            <Route path="/pricing"      element={<Navigate to="/dashboard" replace />} />
+            <Route path="/404"          element={<AppLayout><NotFound /></AppLayout>} />
 
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Catch-all 404 handler */}
+            <Route path="*" element={<AppLayout><NotFound /></AppLayout>} />
           </Routes>
         </Suspense>
       </AuthProvider>

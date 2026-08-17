@@ -21,11 +21,7 @@ if (isProduction) {
 
 // 2. IS_DEMO_AUTH
 const ALLOW_DEMO_AUTH = process.env.ALLOW_DEMO_AUTH === 'true';
-const IS_DEMO_AUTH = ALLOW_DEMO_AUTH || 
-  !process.env.RAZORPAY_KEY_ID || 
-  process.env.RAZORPAY_KEY_ID === 'rzp_test_XXXXXXXXXXXXXXXX' || 
-  !process.env.RAZORPAY_KEY_SECRET || 
-  process.env.RAZORPAY_KEY_SECRET === 'your_razorpay_secret';
+const IS_DEMO_AUTH = ALLOW_DEMO_AUTH || process.env.NODE_ENV !== 'production';
 
 // Helper to check and log demo mode usage
 const requireDemoMode = (handlerName) => {
@@ -44,19 +40,6 @@ if (isProduction) {
   }
 }
 
-// 4. RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || 'rzp_test_XXXXXXXXXXXXXXXX';
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'your_razorpay_secret';
-
-if (isProduction) {
-  if (!process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET === 'your_razorpay_secret') {
-    throw new Error('FATAL: RAZORPAY_KEY_SECRET must be set and cannot be the default placeholder in production mode.');
-  }
-} else {
-  if (RAZORPAY_KEY_SECRET === 'your_razorpay_secret') {
-    console.warn('⚠️ WARNING: RAZORPAY_KEY_SECRET is set to the default placeholder.');
-  }
-}
 
 // 5. S3 / Object Storage
 const S3_ENABLED      = process.env.S3_ENABLED === 'true';
@@ -78,14 +61,31 @@ const APP_BASE_URL   = process.env.APP_BASE_URL || 'http://localhost:5173';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
 
+// 7. Sarvam AI STT
+const SARVAM_API_KEY = process.env.SARVAM_API_KEY || '';
+const SARVAM_MODEL = process.env.SARVAM_MODEL || 'saaras:v3';
+if (!SARVAM_API_KEY) {
+  console.warn('⚠️ WARNING: SARVAM_API_KEY is not set. Speech-to-text features will be unavailable.');
+}
+
+// 8. Optional API keys — warn if missing but do not crash
+const OPTIONAL_KEYS = [
+  ['GEMINI_API_KEY',    'Gemini AI fallback features'],
+  ['RAZORPAY_KEY_ID',  'Razorpay payment processing'],
+];
+for (const [key, feature] of OPTIONAL_KEYS) {
+  if (!process.env[key]) {
+    console.warn(`⚠️ WARNING: ${key} is not set. ${feature} will be unavailable.`);
+  }
+}
+
 module.exports = {
   NODE_ENV,
   JWT_SECRET,
   IS_DEMO_AUTH,
   CORS_ORIGIN,
-  RAZORPAY_KEY_ID,
-  RAZORPAY_KEY_SECRET,
   requireDemoMode,
+
   // S3 Object Storage
   S3_ENABLED,
   S3_BUCKET,
@@ -98,4 +98,8 @@ module.exports = {
   APP_BASE_URL,
   RESEND_API_KEY,
   SENDGRID_API_KEY,
+  // Sarvam AI
+  SARVAM_API_KEY,
+  SARVAM_MODEL,
 };
+

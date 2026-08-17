@@ -8,29 +8,33 @@
 const { query } = require('../../config/pgDb');
 const { generateATSSuggestions, parseResumeText } = require('../../services/ai/resumeAnalyzer');
 
+// ── Structured Logger proxy (falls back gracefully if global.logger not yet set)
+const log = {
+  info:  (...a) => (global.logger ? global.logger.info(...a)  : console.log('[INFO]',  ...a)),
+  warn:  (...a) => (global.logger ? global.logger.warn(...a)  : console.warn('[WARN]',  ...a)),
+  error: (...a) => (global.logger ? global.logger.error(...a) : console.error('[ERROR]', ...a)),
+  debug: (...a) => (global.logger ? global.logger.debug?.(...a) : null),
+};
+
+
 /**
  * Robust helper to extract text from a PDF buffer.
  */
 const parsePDFBuffer = async (buffer) => {
   try {
     const pdf = require('pdf-parse');
-    if (typeof pdf === 'function') {
-      const data = await pdf(buffer);
-      return data.text;
-    } else if (pdf && typeof pdf.PDFParse === 'function') {
-      const parser = new pdf.PDFParse();
-      const data = await parser.pdf(buffer);
-      return data.text;
-    } else {
-      // Direct call fallback
-      const data = await pdf(buffer);
-      return data.text;
+    const parserFn = typeof pdf === 'function' ? pdf : (pdf && typeof pdf.default === 'function' ? pdf.default : pdf);
+    if (typeof parserFn === 'function') {
+      const data = await parserFn(buffer);
+      return data.text || '';
     }
+    return buffer.toString('utf-8');
   } catch (err) {
-    console.error('[ResumeController] PDF extraction failure:', err);
+    log.error({ err }, '[ResumeController] PDF extraction failure');
     throw err;
   }
 };
+
 
 /**
  * Rule-based fallback ATS analysis generator.
@@ -206,7 +210,7 @@ exports.buildResume = async (req, res) => {
       // Award XP (50 XP for constructing resume!)
       await query("UPDATE users SET xp = xp + 50 WHERE id = $1", [userId]);
     } catch (dbErr) {
-      console.warn("Database offline during buildResume, using memory fallback:", dbErr.message);
+      log.warn({ err: dbErr }, 'Database offline during buildResume, using memory fallback');
       newResume = {
         id: "res_mock_" + Date.now(),
         user_id: userId,
@@ -226,10 +230,11 @@ exports.buildResume = async (req, res) => {
       resume: newResume
     });
   } catch (err) {
-    console.error("Resume Build Error:", err);
+    log.error({ err }, 'Resume Build Error');
     return res.status(500).json({ message: "Failed to construct resume" });
   }
 };
+
 
 /**
  * Scan and analyze resume JSON fields using rules and AI helper.
@@ -265,10 +270,10 @@ exports.analyzeResume = async (req, res) => {
       if (Array.isArray(aiSuggestions) && aiSuggestions.length > 0) {
         // Merge AI suggestions with rule-based ones (AI takes priority)
         analysis.suggestions = [...aiSuggestions, ...analysis.suggestions.slice(0, 1)];
-        console.log(`✅ OpenRouter generated ${aiSuggestions.length} AI ATS suggestions`);
+        log.info(`OpenRouter generated ${aiSuggestions.length} AI ATS suggestions`);
       }
     } catch (aiErr) {
-      console.warn('AI ATS suggestions unavailable, using rule-based:', aiErr.message);
+      log.warn({ err: aiErr }, 'AI ATS suggestions unavailable, using rule-based');
     }
 
     const rawText = `${name} Resume. Email: ${email}. Skills: ${(skills || []).join(', ')}. Projects: ${(projects || []).map(p => p.title).join(', ')}`;
@@ -294,7 +299,7 @@ exports.analyzeResume = async (req, res) => {
       const savedRecord = result.rows[0];
       recordId = savedRecord.id;
     } catch (dbErr) {
-      console.warn("Database offline during analyzeResume, returning mock record ID:", dbErr.message);
+      log.warn({ err: dbErr }, 'Database offline during analyzeResume, returning mock record ID');
     }
 
     return res.status(200).json({
@@ -302,29 +307,32 @@ exports.analyzeResume = async (req, res) => {
       analysis: { ...analysis, recordId }
     });
   } catch (err) {
-    console.error("ATS Scanner Error:", err);
+    log.error({ err }, 'ATS Scanner Error');
     return res.status(500).json({ message: "Failed to scan and analyze resume" });
   }
 };
+
 
 /**
  * Handle multipart file upload, parse text, and query ATS suggestions.
  */
 exports.uploadResume = async (req, res) => {
   try {
-    const file = req.file;
+    // Support both upload.single('resume') -> req.file and legacy upload.any() -> req.files[0]
+    const file = req.file || req.files?.[0];
     const userId = req.user.userId;
 
-    if (!file) {
+    if (!file || !file.buffer) {
       return res.status(400).json({ message: "No file uploaded" });
     }
+
 
     let rawText = "";
     if (file.mimetype === 'application/pdf') {
       try {
         rawText = await parsePDFBuffer(file.buffer);
       } catch (pdfErr) {
-        console.error("PDF Parsing Error, falling back to text read:", pdfErr);
+        log.warn({ err: pdfErr }, 'PDF Parsing Error, falling back to text read');
         rawText = file.buffer.toString('utf-8');
       }
     } else {
@@ -342,9 +350,9 @@ exports.uploadResume = async (req, res) => {
     try {
       parsedData = await parseResumeText(rawText);
       parsedWithAI = true;
-      console.log(`✅ OpenRouter parsed resume for: ${parsedData.name}`);
+      log.info(`OpenRouter parsed resume for candidate`);
     } catch (e) {
-      console.warn('OpenRouter resume parsing failed, trying Gemini fallback:', e.message);
+      log.warn({ err: e }, 'OpenRouter resume parsing failed, trying Gemini fallback');
     }
 
     // Gemini fallback if OpenRouter failed
@@ -365,7 +373,7 @@ exports.uploadResume = async (req, res) => {
             parsedWithAI = true;
           }
         } catch (err) {
-          console.warn('Gemini fallback also failed, using regex extraction:', err.message);
+          log.warn({ err }, 'Gemini fallback also failed, using regex extraction');
         }
       }
     }
@@ -433,7 +441,8 @@ exports.uploadResume = async (req, res) => {
       // Award XP (50 XP for uploading resume!)
       await query("UPDATE users SET xp = xp + 50 WHERE id = $1", [userId]);
     } catch (dbErr) {
-      console.warn("Database offline during uploadResume, using memory fallback:", dbErr.message);
+      log.warn({ err: dbErr }, 'Database offline during uploadResume, using memory fallback');
+
       savedRecord = {
         id: "res_mock_" + Date.now(),
         user_id: userId,
@@ -448,15 +457,31 @@ exports.uploadResume = async (req, res) => {
       };
     }
 
+    const formattedResume = {
+      id: savedRecord.id,
+      userId: savedRecord.user_id || userId,
+      filename: savedRecord.file_name || file.originalname,
+      file_name: savedRecord.file_name || file.originalname,
+      targetRole: savedRecord.target_role || role,
+      target_role: savedRecord.target_role || role,
+      atsScore: savedRecord.ats_score || analysis.atsScore,
+      ats_score: savedRecord.ats_score || analysis.atsScore,
+      rawText: rawText,
+      analysisData: analysis,
+      createdAt: savedRecord.created_at || new Date().toISOString()
+    };
+
     return res.status(200).json({
       message: "Resume uploaded and analyzed successfully",
-      resume: savedRecord
+      resume: formattedResume
     });
   } catch (err) {
-    console.error("Resume Upload/Analyze Error:", err);
+    log.error({ err }, 'Resume Upload/Analyze Error');
     return res.status(500).json({ message: "Failed to upload and analyze resume" });
   }
 };
+
+
 
 /**
  * Get all resumes for a specific user.
@@ -491,7 +516,7 @@ exports.getUserResumes = async (req, res) => {
 
     return res.status(200).json({ resumes });
   } catch (err) {
-    console.warn("[GetResumes] Database offline, returning empty resume mock array:", err.message);
+    log.warn({ err }, '[GetResumes] Database offline, returning empty resume mock array');
     const mockResumes = [
       {
         id: "res_mock_1",

@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { usePlan } from '../hooks/usePlan';
 import { io } from 'socket.io-client';
 import { BACKEND_URL, API_BASE } from '../config';
 import { 
@@ -13,7 +12,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export default function InterviewLobby() {
   const { token, user } = useAuth();
-  const { isFreePlan } = usePlan();
   const navigate = useNavigate();
 
   // Tab State: 'ai' (AI Interview) or 'peer' (Peer Matchmaker)
@@ -163,21 +161,22 @@ export default function InterviewLobby() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to upload resume');
 
+      const resData = data.resume || data;
       // Add the new resume to the state list
       const newResume = {
-        id: data.resume.id,
-        filename: data.resume.filename,
-        targetRole: data.resume.targetRole || 'Software Engineer',
-        atsScore: data.resume.atsScore || 80
+        id: resData.id,
+        filename: resData.filename || resData.file_name || file.name,
+        targetRole: resData.targetRole || resData.target_role || 'Software Engineer',
+        atsScore: resData.atsScore || resData.ats_score || 80
       };
 
-      setResumes(prev => [newResume, ...prev]);
-      setSelectedResumeId(data.resume.id);
+      setResumes(prev => [newResume, ...prev.filter(r => r.id !== newResume.id)]);
+      setSelectedResumeId(newResume.id);
       setUploadSuccess(true);
       
-      // Auto-set the role, difficulty, etc. if Gemini detected it!
-      if (data.resume.targetRole) {
-        setRole(data.resume.targetRole);
+      // Auto-set the role if detected from resume
+      if (newResume.targetRole) {
+        setRole(newResume.targetRole);
       }
     } catch (err) {
       console.error("Resume Upload Error:", err);
@@ -186,6 +185,7 @@ export default function InterviewLobby() {
       setUploadingFile(false);
     }
   };
+
 
   const handleStartInterview = async () => {
     const allChecked = Object.values(confidenceCheck).every(v => v === true);
@@ -396,20 +396,7 @@ export default function InterviewLobby() {
   return (
     <div className="space-y-6 pt-2 pb-12 w-full text-left">
       
-      {/* Free Plan Banner */}
-      {isFreePlan && (
-        <div className="upgrade-banner rounded-2xl flex gap-3 items-center" style={{
-          background: 'linear-gradient(135deg, rgba(239,68,68,0.1), rgba(139,92,246,0.05))',
-          border: '1px solid rgba(139,92,246,0.2)'
-        }}>
-          <span className="upgrade-banner-icon text-lg">⚡</span>
-          <div className="text-sm">
-            <strong className="text-white">Free Plan:</strong> You have 3 mock interviews per month.{' '}
-            <Link to="/pricing" className="text-indigo-400 hover:text-indigo-300 font-semibold underline transition-colors">Upgrade to Pro</Link>
-            {' '}for unlimited interviews, coding evaluation, and advanced analytics.
-          </div>
-        </div>
-      )}
+
 
       {matchingState !== 'matched' && (
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -471,18 +458,12 @@ export default function InterviewLobby() {
                     {['HR', 'Technical', 'Behavioral', 'Aptitude', 'Coding'].map(t => (
                       <button
                         key={t}
-                        onClick={() => {
-                          if (isFreePlan && t !== 'HR') {
-                            alert(`The ${t} interview round requires the Pro Plan. Please upgrade.`);
-                            return;
-                          }
-                          setType(t);
-                        }}
-                        className={`py-3 px-2 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-1.5 ${
+                        onClick={() => setType(t)}
+                        className={`py-3 px-2 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-1.5 cursor-pointer ${
                           type === t 
                             ? 'bg-glow-gradient text-white border-violet-500/25 shadow-lg' 
                             : 'bg-slate-950/40 border-white/5 text-slate-400 hover:text-white'
-                        } ${isFreePlan && t !== 'HR' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        }`}
                       >
                         <span className="text-base">
                           {t === 'HR' && '👔'}
@@ -492,11 +473,12 @@ export default function InterviewLobby() {
                           {t === 'Coding' && '⚡'}
                         </span>
                         <span>
-                          {t} {isFreePlan && t !== 'HR' && '🔒'}
+                          {t}
                         </span>
                       </button>
                     ))}
                   </div>
+
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">

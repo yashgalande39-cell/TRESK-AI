@@ -6,6 +6,14 @@
 const { query } = require('../../config/pgDb');
 const { IS_DEMO_AUTH, requireDemoMode } = require('../../config/env');
 
+// Structured Logger reference (Pino via global.logger with console fallback)
+const logger = {
+  info:  (...args) => (global.logger ? global.logger.info(...args)  : console.log(...args)),
+  warn:  (...args) => (global.logger ? global.logger.warn(...args)  : console.warn(...args)),
+  error: (...args) => (global.logger ? global.logger.error(...args) : console.error(...args)),
+  debug: (...args) => (global.logger ? global.logger.debug(...args) : console.log(...args)),
+};
+
 // Offline in-memory fallback store for session replay events
 const inMemoryReplayStorage = new Map();
 
@@ -23,16 +31,23 @@ exports.saveReplay = async (req, res) => {
     }
 
     try {
-      // 1. Try PostgreSQL insert
-      for (const event of events) {
+      // 1. Try PostgreSQL batch insert
+      if (events.length > 0) {
+        const values = [];
+        const placeholders = events.map((event, i) => {
+          const base = i * 5;
+          values.push(sessionId, userId, event.t, event.type, JSON.stringify(event.payload || {}));
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, NOW())`;
+        }).join(', ');
+
         await query(`
           INSERT INTO replay_events (session_id, user_id, t, type, payload, created_at)
-          VALUES ($1, $2, $3, $4, $5, NOW())
-        `, [sessionId, userId, event.t, event.type, JSON.stringify(event.payload || {})]);
+          VALUES ${placeholders}
+        `, values);
       }
-      console.log(`✅ Saved ${events.length} replay events to PostgreSQL for session: ${sessionId}`);
+      logger.info({ count: events.length, sessionId }, `✅ Saved ${events.length} replay events to PostgreSQL for session: ${sessionId}`);
     } catch (dbErr) {
-      console.warn('[ReplayController] Database offline, saving to in-memory fallback:', dbErr.message);
+      logger.warn({ err: dbErr.message }, '[ReplayController] Database offline, saving to in-memory fallback');
       // Fallback to in-memory store
       if (!inMemoryReplayStorage.has(sessionId)) {
         inMemoryReplayStorage.set(sessionId, []);
@@ -43,7 +58,7 @@ exports.saveReplay = async (req, res) => {
 
     return res.status(200).json({ message: 'Replay events saved', count: events.length });
   } catch (err) {
-    console.error('Save Replay Error:', err);
+    logger.error({ err }, 'Save Replay Error');
     return res.status(500).json({ message: 'Failed to save replay events' });
   }
 };
@@ -95,7 +110,7 @@ exports.getReplay = async (req, res) => {
         }));
       }
     } catch (dbErr) {
-      console.warn('[ReplayController] Database offline during replay retrieval:', dbErr.message);
+      logger.warn({ err: dbErr.message }, '[ReplayController] Database offline during replay retrieval');
     }
 
     // 2. Fallback to memory / mockDb
@@ -123,7 +138,7 @@ exports.getReplay = async (req, res) => {
       hasDetailedReplay: events.length > 0,
     });
   } catch (err) {
-    console.error('Get Replay Error:', err);
+    logger.error({ err }, 'Get Replay Error');
     return res.status(500).json({ message: 'Failed to retrieve replay' });
   }
 };
@@ -170,14 +185,14 @@ exports.listReplays = async (req, res) => {
           }
         ];
       } else {
-        console.error('[listReplays] Database error:', dbErr);
+        logger.error({ err: dbErr }, '[listReplays] Database error');
         return res.status(503).json({ message: 'Service temporarily unavailable' });
       }
     }
 
     return res.status(200).json({ replays, total: replays.length });
   } catch (err) {
-    console.error('List Replays Error:', err);
+    logger.error({ err }, 'List Replays Error');
     return res.status(500).json({ message: 'Failed to list replays' });
   }
 };

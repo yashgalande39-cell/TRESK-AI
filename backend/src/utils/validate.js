@@ -34,8 +34,22 @@ const validate = (schema) => (req, res, next) => {
 };
 
 // ── Reusable field definitions ────────────────────────────────────────────────
-const password = Joi.string().min(6).max(128).required();
-const email    = Joi.string().email().max(254).lowercase().trim().required();
+// Password must be 8–128 chars and contain at least one lowercase letter,
+// one uppercase letter, and one digit (no plain-text weak passwords).
+const password = Joi.string()
+  .min(8)
+  .max(128)
+  .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+  .required()
+  .messages({
+    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, and one digit.',
+    'string.min': 'Password must be at least 8 characters.',
+  });
+
+const email = Joi.string().email().max(254).lowercase().trim().required();
+
+// A valid Supabase/Postgres UUID for session/entity IDs
+const uuid = Joi.string().uuid({ version: ['uuidv4'] });
 
 // ── Schema catalogue ──────────────────────────────────────────────────────────
 const schemas = {
@@ -56,7 +70,11 @@ const schemas = {
     }),
 
     googleAuth: Joi.object({
-      idToken: Joi.string().required(),
+      // Must be a JWT-shaped string (3 dot-separated base64url segments)
+      idToken: Joi.string()
+        .pattern(/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/)
+        .required()
+        .messages({ 'string.pattern.base': 'idToken must be a valid JWT.' }),
     }),
 
     changePassword: Joi.object({
@@ -79,7 +97,7 @@ const schemas = {
     }),
 
     resetPassword: Joi.object({
-      token:       Joi.string().required(),
+      token:       Joi.string().min(10).max(256).required(),
       newPassword: password,
     }),
 
@@ -88,18 +106,7 @@ const schemas = {
     }),
   },
 
-  billing: {
-    createOrder: Joi.object({
-      plan: Joi.string().valid('pro', 'teams').required(),
-    }),
 
-    verifyPayment: Joi.object({
-      orderId:   Joi.string().required(),
-      paymentId: Joi.string().required(),
-      signature: Joi.string().allow('').optional(), // may be empty in demo mode
-      plan:      Joi.string().optional(),           // client can submit it, but server derives from order
-    }),
-  },
 
   interview: {
     start: Joi.object({
@@ -107,6 +114,40 @@ const schemas = {
       role:       Joi.string().max(100).allow('').optional(),
       type:       Joi.string().valid('hr','technical','behavioral','system_design','aptitude','coding').required(),
     }),
+
+    generate: Joi.object({
+      type:       Joi.string().valid('hr','technical','behavioral','system_design','aptitude','coding').required(),
+      role:       Joi.string().max(100).allow('').optional(),
+      company:    Joi.string().max(100).allow('').optional(),
+      difficulty: Joi.string().valid('Easy','Medium','Hard').optional(),
+      resumeText: Joi.string().max(20000).allow('').optional(),
+    }),
+
+    submitAnswer: Joi.object({
+      sessionId: uuid.required(),
+      answer:    Joi.string().min(1).max(8000).required(),
+      questionIndex: Joi.number().integer().min(0).optional(),
+    }),
+
+    finishSession: Joi.object({
+      sessionId: uuid.required(),
+    }),
+  },
+
+  resume: {
+    analyze: Joi.object({
+      resumeText: Joi.string().min(10).max(50000).optional(),
+      resumeData: Joi.object({
+        name:           Joi.string().max(200).allow('').optional(),
+        email:          Joi.string().email().max(254).allow('').optional(),
+        phone:          Joi.string().max(30).allow('').optional(),
+        skills:         Joi.array().items(Joi.string().max(100)).max(100).optional(),
+        experience:     Joi.array().max(30).optional(),
+        projects:       Joi.array().max(30).optional(),
+        education:      Joi.array().max(20).optional(),
+        targetRole:     Joi.string().max(100).allow('').optional(),
+      }).optional(),
+    }).or('resumeText', 'resumeData'),
   },
 
   coding: {
@@ -120,6 +161,38 @@ const schemas = {
       code:      Joi.string().max(50000).required(),
       language:  Joi.string().valid('javascript','python','java','cpp','c','typescript','go','rust','ruby').required(),
       problemId: Joi.string().max(100).required(),
+    }),
+  },
+
+  ai: {
+    evaluateAnswer: Joi.object({
+      question: Joi.string().min(1).max(2000).required(),
+      answer:   Joi.string().min(1).max(8000).required(),
+      type:     Joi.string().max(100).allow('').optional(),
+      role:     Joi.string().max(100).allow('').optional(),
+    }),
+
+    analyzeResume: Joi.object({
+      resumeText: Joi.string().min(10).max(50000).required(),
+      targetRole: Joi.string().max(100).allow('').optional(),
+    }),
+
+    analyzeJd: Joi.object({
+      jobDescription: Joi.string().min(10).max(20000).required(),
+    }),
+
+    generateQuestions: Joi.object({
+      type:       Joi.string().valid('hr','technical','behavioral','system_design','aptitude','coding').required(),
+      role:       Joi.string().max(100).required(),
+      difficulty: Joi.string().valid('Easy','Medium','Hard').optional(),
+      company:    Joi.string().max(100).allow('').optional(),
+      language:   Joi.string().max(50).allow('').optional(),
+      resumeText: Joi.string().max(20000).allow('').optional(),
+    }),
+
+    chat: Joi.object({
+      message: Joi.string().min(1).max(4000).required(),
+      context: Joi.string().max(2000).allow('').optional(),
     }),
   },
 };

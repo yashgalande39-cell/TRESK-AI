@@ -183,26 +183,9 @@ CREATE TABLE IF NOT EXISTS daily_challenge_completions (
 );
 
 -- =============================================================================
--- BILLING / PAYMENTS
--- =============================================================================
-CREATE TABLE IF NOT EXISTS payments (
-  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  razorpay_order_id   TEXT    UNIQUE NOT NULL,
-  razorpay_payment_id TEXT,
-  plan            TEXT        NOT NULL,
-  amount_paise    INTEGER     NOT NULL,
-  currency        TEXT        NOT NULL DEFAULT 'INR',
-  status          TEXT        NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'paid', 'failed', 'refunded')),
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  paid_at         TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
-
--- =============================================================================
 -- TRESK AI CHAT SESSIONS
 -- =============================================================================
+
 CREATE TABLE IF NOT EXISTS tresk_sessions (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -486,3 +469,21 @@ DO $$ BEGIN
     ALTER TABLE resumes ADD COLUMN readability_score NUMERIC(5,2) DEFAULT 0;
   END IF;
 END $$;
+
+-- =============================================================================
+-- USER NOTIFICATIONS
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type            TEXT        NOT NULL DEFAULT 'system',
+  title           TEXT        NOT NULL,
+  message         TEXT        NOT NULL,
+  read            BOOLEAN     NOT NULL DEFAULT FALSE,
+  link            TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_time ON notifications(user_id, created_at DESC);

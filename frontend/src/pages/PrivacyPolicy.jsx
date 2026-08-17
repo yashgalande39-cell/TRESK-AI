@@ -57,8 +57,7 @@ export default function PrivacyPolicy() {
               <li>Account registration data: name, email address, password (stored as a bcrypt hash)</li>
               <li>Profile information: college name, branch, graduation year, bio, location</li>
               <li>Resume content uploaded for ATS analysis</li>
-              <li>Interview session responses and answers</li>
-              <li>Payment information processed by Razorpay (we do not store card numbers)</li>
+              <li>Interview session responses and voice audio clips</li>
             </ul>
 
             <h3 className="text-base font-medium text-slate-200 mt-4 mb-2">1.2 Information Collected Automatically</h3>
@@ -81,8 +80,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>To provide, maintain, and improve the Service</li>
               <li>To personalize your interview preparation experience using AI</li>
-              <li>To process payments and manage subscriptions</li>
-              <li>To send transactional emails (email verification, password reset, plan upgrades)</li>
+              <li>To send transactional emails (email verification, password reset)</li>
               <li>To detect and prevent fraud, abuse, and security threats</li>
               <li>To comply with legal obligations</li>
               <li>To analyze usage patterns and improve our AI models</li>
@@ -106,7 +104,7 @@ export default function PrivacyPolicy() {
             <h2 className="text-xl font-semibold text-white mb-3">4. Data Sharing and Disclosure</h2>
             <p className="mb-3">We do not sell your personal data. We may share information with:</p>
             <ul className="list-disc list-inside space-y-1 ml-2">
-              <li><strong className="text-slate-200">Razorpay</strong> — for payment processing (governed by Razorpay's privacy policy)</li>
+              <li><strong className="text-slate-200">Sarvam AI</strong> — for real-time speech-to-text processing</li>
               <li><strong className="text-slate-200">OpenRouter / Google Gemini</strong> — for AI feature processing</li>
               <li><strong className="text-slate-200">Firebase (Google)</strong> — for Google OAuth authentication</li>
               <li><strong className="text-slate-200">Email service providers</strong> — for transactional email delivery</li>
@@ -124,8 +122,8 @@ export default function PrivacyPolicy() {
               <li>Authentication tokens stored in httpOnly, Secure, SameSite cookies</li>
               <li>All data transmitted over HTTPS/TLS</li>
               <li>Database connections protected with SSL in production</li>
-              <li>Razorpay HMAC signature verification for all payment webhooks</li>
             </ul>
+
             <p className="mt-3">
               No method of transmission over the internet is 100% secure. We cannot guarantee absolute security.
             </p>

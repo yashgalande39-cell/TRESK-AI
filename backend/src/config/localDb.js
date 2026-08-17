@@ -142,25 +142,9 @@ const parseInsert = (sql, params) => {
     };
   }
 
-  if (sqlNormalized.includes('insert into payments')) {
-    return {
-      table: 'payments',
-      row: {
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        user_id: params[0],
-        razorpay_order_id: params[1],
-        razorpay_payment_id: params[2],
-        plan: params[3],
-        amount_paise: params[4],
-        status: 'paid',
-        paid_at: new Date().toISOString()
-      }
-    };
-  }
-
   return null;
 };
+
 
 const query = async (text, params = []) => {
   const db = readDb();
@@ -371,22 +355,8 @@ const query = async (text, params = []) => {
         if (existing) return { rows: [existing] };
       }
 
-      // Check payment conflicts (acting like ON CONFLICT)
-      if (parsed.table === 'payments') {
-        const existingIdx = db.payments.findIndex(p => p.razorpay_order_id === parsed.row.razorpay_order_id);
-        if (existingIdx !== -1) {
-          db.payments[existingIdx] = {
-            ...db.payments[existingIdx],
-            razorpay_payment_id: parsed.row.razorpay_payment_id,
-            status: 'paid',
-            paid_at: new Date().toISOString()
-          };
-          writeDb(db);
-          return { rows: [db.payments[existingIdx]] };
-        }
-      }
-
       db[parsed.table].push(parsed.row);
+
       writeDb(db);
       return { rows: [parsed.row] };
     }

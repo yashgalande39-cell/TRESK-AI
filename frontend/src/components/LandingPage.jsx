@@ -1,4 +1,3 @@
-import { useLenis } from '../hooks/useLenis';
 import { NeuralBackground } from './landing/fx/NeuralBackground';
 import { CursorGlow } from './landing/fx/CursorGlow';
 import { LandingNavbar } from './landing/sections/LandingNavbar';
@@ -10,7 +9,7 @@ import { FinalCTA, Footer } from './landing/sections/FinalCTA';
 import './landing/landing.css';
 
 export default function LandingPage() {
-  useLenis();
+
 
   return (
     <main className="lp-root">

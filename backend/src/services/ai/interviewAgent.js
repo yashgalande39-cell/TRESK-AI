@@ -14,38 +14,50 @@ const { sanitizePromptInput } = require('../../utils/sanitizePromptInput');
 async function generateInterviewQuestions(type, difficulty, role, company, language, resumeText = '') {
   const safeRole = sanitizePromptInput(role, 100);
   const safeCompany = sanitizePromptInput(company, 100);
-  const safeResume = sanitizePromptInput(resumeText, 3000);
+  const safeResume = sanitizePromptInput(resumeText, 8000);
   const safeType = sanitizePromptInput(type, 100);
   const safeLanguage = sanitizePromptInput(language, 100);
   const safeDifficulty = sanitizePromptInput(difficulty, 100);
 
-  const companyCtx = safeCompany && safeCompany !== 'Common' ? `at ${safeCompany}` : 'at a premium technology company';
-  const resumeCtx = safeResume
-    ? `\n\nCandidate Resume Context (reference specific details, projects, or metrics where appropriate):\n${safeResume}`
+  const companyCtx = safeCompany && safeCompany !== 'Common' ? `at ${safeCompany}` : 'at a top technology company';
+  const hasResume = Boolean(safeResume && safeResume.trim().length > 30);
+  
+  const resumeCtx = hasResume
+    ? `\n\n════════ CANDIDATE RESUME DETAILS ════════\n${safeResume}\n══════════════════════════════════════════`
     : '';
 
-  const systemPrompt = `You are a world-class senior interviewer at a top-tier tech company. You conduct realistic, highly tailored, and challenging interviews. 
-You always ask precise, professional questions and avoid generic, textbook questions. Ensure your questions are conversational, recruiter-style, and context-aware.`;
+  const systemPrompt = `You are a world-class senior hiring manager and principal tech interviewer at an elite company. 
+You conduct realistic, authentic, and deeply personalized interviews. 
+When a candidate's resume is provided, you meticulously analyze their actual projects, tech stack, work experience, metrics, and education to ask customized questions that directly cite their resume details. 
+Avoid generic textbook questions. Sound conversational, professional, and insightful.`;
 
   const userPrompt = `Generate exactly 5 ${safeDifficulty}-level mock interview questions for a ${safeRole} position ${companyCtx}.
 Interview Domain: ${safeType}
 Programming Language/Domain: ${safeLanguage || 'General'}${resumeCtx}
 
 Instructions:
-- Tailor the questions specifically to the candidate's background if resume context is provided.
-- Maintain a realistic, professional, recruiter-like tone.
-- For Technical/Coding: Focus on real-world systems, architecture trade-offs, optimization, and real problems rather than simple syntax questions.
-- For Behavioral: Use STAR method prompting based on their experience or relevant scenarios.
-- Return ONLY a valid JSON array of exactly 5 strings. Do not write any markdown blocks or explanations:
+${hasResume ? `
+- MANDATORY RESUME PERSONALIZATION: You MUST reference specific projects, claimed metrics, previous roles, or specific libraries/tools listed in the candidate's resume above.
+- Example pattern: "In your resume you noted working on [Project X] using [Tech Y] to [Metric/Goal Z]. Can you walk me through the system architecture and how you handled [technical challenge]?"
+- For HR: Probe their career journey, leadership in their listed projects, and team dynamics at past companies/internships.
+- For Technical: Deep-dive into architectural choices, scalability, database bottlenecks, and tradeoffs in their actual projects and skill stack.
+- For Behavioral: Use the STAR method (Situation, Task, Action, Result) focused on challenges from their actual listed experience.
+` : `
+- Tailor questions deeply to ${safeRole} expectations in ${safeType} round.
+- Focus on real-world engineering scenarios, system design tradeoffs, and team challenges.
+`}
+- Return ONLY a valid JSON array of exactly 5 strings (no markdown blocks, no commentary):
 ["question 1", "question 2", "question 3", "question 4", "question 5"]`;
+
 
   try {
     const text = await callOpenRouter([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
-    ], { temperature: 0.75, max_tokens: 1200 });
+    ], { temperature: 0.75, max_tokens: 3000 });
 
     const questions = parseJsonResponse(text);
+
     if (Array.isArray(questions) && questions.length > 0) {
       return questions;
     }

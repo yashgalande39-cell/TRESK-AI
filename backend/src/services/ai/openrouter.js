@@ -11,38 +11,64 @@ const responseCache = new LRUCache({
 });
 
 /**
- * Parse JSON from AI response safely, stripping markdown fences
+ * Parse JSON from AI response safely, stripping thinking tags and markdown fences
  */
 function parseJsonResponse(text) {
   if (!text) throw new Error('Empty text content');
-  const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  // Remove thinking blocks <think>...</think>
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Remove markdown code blocks
+  cleaned = cleaned.replace(/```(?:json)?\s*/gi, '').replace(/```\s*/g, '').trim();
+  
   try {
     return JSON.parse(cleaned);
   } catch (_) {
+    // Try to extract JSON array
     const arrMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (arrMatch) return JSON.parse(arrMatch[0]);
+    if (arrMatch) {
+      try { 
+        return JSON.parse(arrMatch[0].replace(/,\s*([\]}])/g, '$1')); 
+      } catch (_) {}
+    }
+    // If it is an array of strings, extract all completed quoted strings
+    if (cleaned.includes('[')) {
+      const stringMatches = [...cleaned.matchAll(/"((?:\\.|[^"\\])*)"/g)].map(m => m[1].replace(/\\"/g, '"'));
+      if (stringMatches.length >= 2) {
+        return stringMatches;
+      }
+    }
+    // Try to extract JSON object
     const objMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (objMatch) return JSON.parse(objMatch[0]);
-    throw new Error('Could not parse JSON from AI response');
+    if (objMatch) {
+      try { 
+        return JSON.parse(objMatch[0].replace(/,\s*([\]}])/g, '$1')); 
+      } catch (_) {}
+    }
+    throw new Error(`Could not parse JSON from AI response: ${cleaned.slice(0, 150)}`);
   }
 }
 
-// Verified working free-tier models on OpenRouter (June 2025)
+
+// Verified working active free-tier models on OpenRouter
 const MODELS = {
-  primary: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
-  fast:    'meta-llama/llama-3.3-70b-instruct:free',
-  code:    'meta-llama/llama-3.3-70b-instruct:free',
-  free:    'meta-llama/llama-3.3-70b-instruct:free',
+  primary: process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-super-120b-a12b:free',
+  fast:    'google/gemma-4-31b-it:free',
+  code:    'openai/gpt-oss-20b:free',
+  free:    'nvidia/nemotron-3-super-120b-a12b:free',
 };
 
 // Failover chain — tried in order when a model is unavailable
 const MODEL_FAILOVER = [
-  'meta-llama/llama-3.3-70b-instruct:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
   'google/gemma-4-31b-it:free',
-  'nousresearch/hermes-3-llama-3.1-405b:free',
+  'google/gemma-4-26b-a4b-it:free',
   'openai/gpt-oss-20b:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-nano-30b-a3b:free',
+  'poolside/laguna-s-2.1:free',
 ];
+
+
 
 /**
  * Call OpenRouter with automatic model failover, retry logic, and caching.
@@ -65,11 +91,24 @@ async function callOpenRouter(messages, optionsOrModel = {}, options = {}) {
   // Dedup failover list: put preferred model first
   const modelsToTry = [preferredModel, ...MODEL_FAILOVER.filter(m => m !== preferredModel)];
 
-  // Check cache
+  const logDebug = (msg) => global.logger?.debug ? global.logger.debug(msg) : console.log(msg);
+  const logInfo  = (msg) => global.logger?.info ? global.logger.info(msg) : console.log(msg);
+
+  // 1. Check in-memory L1 cache
   const cacheKey = JSON.stringify({ messages, model: preferredModel, options: actualOptions });
   if (responseCache.has(cacheKey)) {
-    console.log(`[OpenRouter Cache] Hit`);
+    logDebug('[OpenRouter L1 Cache] Hit');
     return responseCache.get(cacheKey);
+  }
+
+  // 2. Check Redis L2 cache
+  const { getCached, setCached, createCacheKey, DEFAULT_TTLS } = require('../cache/redisCache');
+  const redisKey = createCacheKey('openrouter', { messages, model: preferredModel, options: actualOptions });
+  const redisCached = await getCached(redisKey);
+  if (redisCached) {
+    logDebug('[OpenRouter L2 Redis Cache] Hit');
+    responseCache.set(cacheKey, redisCached);
+    return redisCached;
   }
 
   let lastError = null;
@@ -86,7 +125,7 @@ async function callOpenRouter(messages, optionsOrModel = {}, options = {}) {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      console.log(`[OpenRouter] Trying ${model}`);
+      logDebug(`[OpenRouter] Trying ${model}`);
       const response = await fetch(OPENROUTER_API_URL, {
         method: 'POST',
         headers: {
@@ -108,7 +147,8 @@ async function callOpenRouter(messages, optionsOrModel = {}, options = {}) {
 
         const trimmed = text.trim();
         responseCache.set(cacheKey, trimmed);
-        console.log(`[OpenRouter] ✅ Success with ${model}`);
+        setCached(redisKey, trimmed, DEFAULT_TTLS.LLM_RESPONSE).catch(() => {});
+        logInfo(`[OpenRouter] ✅ Success with ${model}`);
         return trimmed;
       }
 

@@ -58,36 +58,49 @@ async function evaluateAnswer(question, answer, type, role) {
 
   const safeRole = sanitizePromptInput(role, 100);
   const safeType = sanitizePromptInput(type, 100);
-  const safeQuestion = sanitizePromptInput(question, 500);
-  const safeAnswer = sanitizePromptInput(answer, 2000);
+  const safeQuestion = sanitizePromptInput(question, 1000);
+  const safeAnswer = sanitizePromptInput(answer, 4000);
 
-  const systemPrompt = `You are an elite, demanding tech interviewer evaluating interview answers. 
-Be highly analytical, fair, and extremely specific. Grade strictly but provide constructive feedback.`;
+  const systemPrompt = `You are a principal bar-raiser and expert hiring manager conducting authentic interview evaluations. 
+Provide rigorous, candid, and high-fidelity feedback. 
+Evaluate what the candidate actually said vs what was missing. 
+Assess depth, accuracy, clarity, and structural communication (STAR methodology for behavioral/HR; trade-offs and scaling for technical). 
+Be realistic and constructive.`;
 
-  const userPrompt = `Evaluate this mock interview answer for a ${safeRole} position.
-Question Type: ${safeType}
-Question: ${safeQuestion}
-Candidate's Answer: ${safeAnswer}
+  const userPrompt = `Evaluate this candidate's live interview answer for a ${safeRole} position.
+Round Type: ${safeType}
+Question Asked: "${safeQuestion}"
+Candidate's Response: "${safeAnswer}"
 
-Evaluate and return ONLY a valid JSON object matching the exact structure below (no markdown fences, no extra text):
+Evaluate strictly and return ONLY a valid JSON object matching the exact structure below (no markdown fences, no extra commentary):
 {
-  "technicalScore": 80, // score from 0-100 evaluating depth, correctness, and accuracy
-  "communicationScore": 85, // score from 0-100 evaluating clarity, professionalism, structure, and pacing
-  "completenessScore": 75, // score from 0-100 evaluating how thoroughly the question was answered
-  "overallScore": 80, // weighted average score 0-100
-  "strengths": ["strength 1", "strength 2"],
-  "improvements": ["improvement 1", "improvement 2"],
-  "idealAnswerHints": "A 2-3 sentence explanation of what an ideal answer would include",
-  "keyMissingPoints": ["missing point 1", "missing point 2"]
+  "technicalScore": 82, // 0-100 evaluating depth, correctness, real-world accuracy, and precision
+  "communicationScore": 88, // 0-100 evaluating clarity, conciseness, structured delivery (e.g. STAR method), and professional tone
+  "completenessScore": 78, // 0-100 evaluating whether all aspects and edge cases of the question were answered
+  "overallScore": 83, // weighted realistic score 0-100
+  "strengths": [
+    "Specific strength mentioning exactly what was good about their response",
+    "Another distinct strength"
+  ],
+  "improvements": [
+    "Specific, highly actionable advice on what to improve or elaborate on",
+    "Another constructive improvement suggestion"
+  ],
+  "idealAnswerHints": "A 2-3 sentence authentic breakdown of how a top 1% candidate answers this question with concrete examples and metrics",
+  "keyMissingPoints": [
+    "Crucial technical concept, metric, or trade-off omitted in their response"
+  ]
 }`;
+
 
   try {
     const text = await callOpenRouter([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
-    ], { temperature: 0.3, max_tokens: 800 });
+    ], { temperature: 0.3, max_tokens: 2000 });
 
     return parseJsonResponse(text);
+
   } catch (error) {
     console.error('[scoringEngine] Error evaluating answer:', error.message);
     throw error;

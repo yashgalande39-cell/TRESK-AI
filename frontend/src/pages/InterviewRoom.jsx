@@ -7,9 +7,12 @@ import {
   Edit3, ArrowRight,
   Phone, PhoneOff, Volume1,
   AlertTriangle, X,
-  Send, Square, Eye, Brain
+  Send, Square, Eye, Brain,
+  Loader2, Sparkles, Radio
 } from 'lucide-react';
 import MetricRing from '../components/ui/MetricRing';
+import { AudioRecorder } from '../utils/audioRecorder';
+
 
 export default function InterviewRoom() {
   const { token, updateXp } = useAuth();
@@ -33,11 +36,30 @@ export default function InterviewRoom() {
   const [totalQuestions, setTotalQuestions] = useState(5);
   const [answerText, setAnswerText] = useState("");
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
+  const [silenceCountdown, setSilenceCountdown] = useState(null); // VAD silence countdown (in seconds)
   const [speechTimer, setSpeechTimer] = useState(0);
   const [liveCaption, setLiveCaption] = useState("");
   const [aiFeedback, setAiFeedback] = useState(null); // { text, type: 'good'|'warn'|'error' }
   const aiFeedbackTimerRef = useRef(null);
   const partialAnalysisDebounceRef = useRef(null);
+  const audioRecorderRef = useRef(null);
+  const chunkIntervalRef = useRef(null);
+  const vadIntervalRef = useRef(null);
+  const hasSpokenRef = useRef(false);
+  const lastSpeechTimeRef = useRef(0);
+  const autoSubmitTriggeredRef = useRef(false);
+  const answerTextRef = useRef("");
+
+  useEffect(() => {
+    answerTextRef.current = answerText;
+    if (answerText.trim().length > 0) {
+      hasSpokenRef.current = true;
+    }
+  }, [answerText]);
+
+
   
   // Interface options
   const [cameraActive, setCameraActive] = useState(true);
@@ -279,63 +301,121 @@ export default function InterviewRoom() {
     }, 800); // 800ms debounce — wait for user to finish the sentence
   };
 
-  // Speech Recognition setup (Web Speech API)
-  useEffect(() => {
+  // ── Sarvam AI saaras:v3 Speech-to-Text Caller ─────────────────────────────
+  const transcribeAudioBlob = async (wavBlob) => {
+    if (!wavBlob || wavBlob.size < 1000) return '';
+    try {
+      setIsTranscribing(true);
+      const formData = new FormData();
+      formData.append('file', wavBlob, 'recording.wav');
+      formData.append('model', 'saaras:v3');
+      formData.append('mode', 'transcribe');
+      formData.append('language_code', oLang === 'Hindi' ? 'hi-IN' : 'en-IN');
+
+      const headers = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_BASE}/ai/transcribe`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (data.success && data.transcript) {
+        return data.transcript.trim();
+      }
+      return '';
+    } catch (err) {
+      console.error('[Sarvam AI STT] Transcription error:', err);
+      return '';
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // ── Speech Recognition Engine (Live Real-Time Web Speech) ─────────────────
+  const initSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
+    if (!SpeechRecognition) return null;
+
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (_) {}
+      }
+
       const rec = new SpeechRecognition();
       rec.continuous = true;
       rec.interimResults = true;
-      rec.lang = 'en-US';
+      rec.lang = oLang === 'Hindi' ? 'hi-IN' : 'en-US';
       rec.maxAlternatives = 1;
 
       rec.onresult = (event) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
+        let interimText = '';
+        let finalizedText = '';
+
         for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const t = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += t;
+          const item = event.results[i];
+          const text = item[0]?.transcript || '';
+          if (item.isFinal) {
+            finalizedText += (finalizedText ? ' ' : '') + text;
           } else {
-            interimTranscript += t;
+            interimText += (interimText ? ' ' : '') + text;
           }
         }
-        // Show interim text in live caption box
-        if (interimTranscript) {
-          setLiveCaption(interimTranscript);
-        }
-        // Finalized sentence: append to answer and trigger AI analysis
-        if (finalTranscript) {
-          setLiveCaption('');
+
+        if (finalizedText.trim()) {
           setAnswerText(prev => {
-            const updated = (prev + ' ' + finalTranscript).trim();
-            // Trigger AI analysis on the full accumulated answer so far
+            const updated = prev ? `${prev} ${finalizedText}`.replace(/\s+/g, ' ').trim() : finalizedText.trim();
+            answerTextRef.current = updated;
             triggerPartialAnalysis(updated, currentQuestion, session);
             return updated;
           });
+          hasSpokenRef.current = true;
+          lastSpeechTimeRef.current = Date.now();
+          setSilenceCountdown(null);
+          setLiveCaption('');
+        }
+
+        if (interimText.trim()) {
+          setLiveCaption(interimText.trim());
+          hasSpokenRef.current = true;
+          lastSpeechTimeRef.current = Date.now();
+          setSilenceCountdown(null);
         }
       };
 
       rec.onerror = (event) => {
-        if (event.error === 'no-speech' || event.error === 'audio-capture') return;
-        console.warn('[SpeechRecognition] Error:', event.error);
+        if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'aborted') return;
+        console.warn('[SpeechRecognition] Warning:', event.error);
       };
 
-      // Auto-restart: browsers stop recognition after ~60s of silence
       rec.onend = () => {
-        setLiveCaption('');
-        // If we're still supposed to be listening, restart immediately
         if (recognitionRef.current?._shouldListen) {
-          try { rec.start(); } catch (e) { /* already started */ }
-        } else {
-          setIsListening(false);
+          try { rec.start(); } catch (_) {}
         }
       };
 
       recognitionRef.current = rec;
+      return rec;
+    } catch (err) {
+      console.warn('[SpeechRecognition] Init error:', err.message);
+      return null;
     }
+  };
+
+  useEffect(() => {
+    initSpeechRecognition();
+    return () => {
+      if (audioRecorderRef.current) {
+        audioRecorderRef.current.stop(true);
+      }
+      clearInterval(chunkIntervalRef.current);
+      clearInterval(vadIntervalRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // Text-To-Speech: Speak current question aloud
   const speakQuestion = () => {
@@ -552,41 +632,16 @@ export default function InterviewRoom() {
     }
   }, [whiteboardOpen]);
 
-  // Speech Timing Controller
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      alert("Speech recognition is not supported in this browser. Please type your answer.");
-      return;
-    }
-
-    if (isListening) {
-      recognitionRef.current._shouldListen = false;
-      recognitionRef.current.stop();
-      setLiveCaption('');
-      clearInterval(timerIntervalRef.current);
-      setIsListening(false);
-    } else {
-      setIsListening(true);
-      recognitionRef.current._shouldListen = true;
-      try { recognitionRef.current.start(); } catch (e) { /* already started */ }
-      setSpeechTimer(0);
-      timerIntervalRef.current = setInterval(() => {
-        setSpeechTimer(prev => prev + 1);
-      }, 1000);
-    }
-  };
-
-  const handleAnswerSubmit = async () => {
-    if (!answerText.trim()) {
+  // ── Core Answer Submission Handler ─────────────────────────────────────────
+  const submitAnswerCore = async (explicitAnswerText = null) => {
+    const textToSubmit = (explicitAnswerText !== null ? explicitAnswerText : answerTextRef.current || answerText).trim();
+    if (!textToSubmit) {
       alert("Please record or write your response first.");
       return;
     }
 
-    if (isListening) {
-      toggleListening();
-    }
-
     setLoading(true);
+    setSilenceCountdown(null);
 
     // Compute average biometric stats
     let avgEyeContactScore = 82;
@@ -614,7 +669,7 @@ export default function InterviewRoom() {
       {
         time: answerTimestamp,
         sender: "You",
-        text: answerText
+        text: textToSubmit
       }
     ];
 
@@ -627,7 +682,7 @@ export default function InterviewRoom() {
         },
         body: JSON.stringify({
           sessionId: session.id,
-          answerText,
+          answerText: textToSubmit,
           speechDurationSeconds: speechTimer || 30,
           tabBlurCount: strikeCount,
           webcamStats: {
@@ -666,6 +721,7 @@ export default function InterviewRoom() {
           }
         ]);
         setAnswerText("");
+        answerTextRef.current = "";
         setSpeechTimer(0);
         setCurrentIndex(prev => prev + 1);
         setCurrentQuestion(nextQ);
@@ -675,7 +731,7 @@ export default function InterviewRoom() {
       console.warn("Answer evaluated offline inside local simulator:", e.message);
 
       // Local fallback metrics computation
-      const wordCount = answerText.split(/\s+/).filter(Boolean).length;
+      const wordCount = textToSubmit.split(/\s+/).filter(Boolean).length;
       let mockTech = 75;
       let mockComm = 80;
       if (wordCount < 5) {
@@ -709,6 +765,7 @@ export default function InterviewRoom() {
           }
         ]);
         setAnswerText("");
+        answerTextRef.current = "";
         setSpeechTimer(0);
         setCurrentIndex(nextIdx);
         setCurrentQuestion(nextQ);
@@ -716,6 +773,192 @@ export default function InterviewRoom() {
       }
     }
   };
+
+  // ── Auto-Submit Handler (triggered after 3-4s pause in speech) ────────────
+  const triggerAutoSubmit = async () => {
+    if (autoSubmitTriggeredRef.current || loading) return;
+    autoSubmitTriggeredRef.current = true;
+    setSilenceCountdown(null);
+
+    // Stop recording and process final audio
+    setIsListening(false);
+    clearInterval(timerIntervalRef.current);
+    clearInterval(chunkIntervalRef.current);
+    clearInterval(vadIntervalRef.current);
+
+    if (recognitionRef.current) {
+      recognitionRef.current._shouldListen = false;
+      try { recognitionRef.current.stop(); } catch (_) {}
+    }
+
+    let finalAnswer = answerTextRef.current || answerText;
+
+    if (audioRecorderRef.current) {
+      const wavBlob = audioRecorderRef.current.stop();
+      if (wavBlob && wavBlob.size > 2000) {
+        const transcript = await transcribeAudioBlob(wavBlob);
+        if (transcript) {
+          finalAnswer = finalAnswer ? `${finalAnswer} ${transcript}`.replace(/\s+/g, ' ').trim() : transcript;
+          setAnswerText(finalAnswer);
+          answerTextRef.current = finalAnswer;
+        }
+      }
+    }
+
+    setLiveCaption('');
+    setMicVolume(0);
+
+    if (finalAnswer.trim()) {
+      await submitAnswerCore(finalAnswer);
+    }
+    autoSubmitTriggeredRef.current = false;
+  };
+
+  // ── Speech Timing & Sarvam AI STT Recording Controller ────────────────────
+  const toggleListening = async () => {
+    if (isListening) {
+      // ── STOP RECORDING & TRANSCRIBE WITH SARVAM AI ──
+      setIsListening(false);
+      clearInterval(timerIntervalRef.current);
+      clearInterval(chunkIntervalRef.current);
+      clearInterval(vadIntervalRef.current);
+      setSilenceCountdown(null);
+
+      if (recognitionRef.current) {
+        recognitionRef.current._shouldListen = false;
+        try { recognitionRef.current.stop(); } catch (_) {}
+      }
+
+      if (audioRecorderRef.current) {
+        const wavBlob = audioRecorderRef.current.stop();
+        if (wavBlob && wavBlob.size > 2000) {
+          const transcript = await transcribeAudioBlob(wavBlob);
+          if (transcript) {
+            setAnswerText(prev => {
+              // If previous text is empty or shorter than high-quality Sarvam STT, use Sarvam STT
+              const updated = prev ? (prev.length < transcript.length * 0.6 ? transcript : `${prev} ${transcript}`.replace(/\s+/g, ' ').trim()) : transcript;
+              answerTextRef.current = updated;
+              triggerPartialAnalysis(updated, currentQuestion, session);
+              return updated;
+            });
+          }
+        }
+      }
+      setLiveCaption('');
+      setMicVolume(0);
+    } else {
+      // ── START RECORDING WITH 16kHz AUDIO RECORDER & LIVE SPEECH ──
+      try {
+        if (!audioRecorderRef.current) {
+          audioRecorderRef.current = new AudioRecorder();
+        }
+        await audioRecorderRef.current.start({
+          onVolume: (vol) => {
+            setMicVolume(vol);
+            if (vol >= 10) {
+              hasSpokenRef.current = true;
+              lastSpeechTimeRef.current = Date.now();
+              setSilenceCountdown(null);
+            }
+          },
+        });
+
+        // Initialize and start live Web Speech recognition
+        initSpeechRecognition();
+
+        setIsListening(true);
+        hasSpokenRef.current = Boolean(answerTextRef.current?.trim());
+        lastSpeechTimeRef.current = Date.now();
+        setSilenceCountdown(null);
+        autoSubmitTriggeredRef.current = false;
+
+        setSpeechTimer(0);
+        timerIntervalRef.current = setInterval(() => {
+          setSpeechTimer(prev => prev + 1);
+        }, 1000);
+
+        // VAD Pause Detector (auto-send after 3.5s silence)
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = setInterval(() => {
+          if (!hasSpokenRef.current) return;
+          if (autoSubmitTriggeredRef.current) return;
+
+          const silenceMs = Date.now() - lastSpeechTimeRef.current;
+          const silenceSec = silenceMs / 1000;
+          const SILENCE_THRESHOLD = 3.5; // 3.5s pause
+
+          if (silenceSec >= 1.0 && silenceSec < SILENCE_THRESHOLD) {
+            const remaining = parseFloat((SILENCE_THRESHOLD - silenceSec).toFixed(1));
+            setSilenceCountdown(remaining);
+          } else if (silenceSec >= SILENCE_THRESHOLD) {
+            setSilenceCountdown(0);
+            clearInterval(vadIntervalRef.current);
+            triggerAutoSubmit();
+          }
+        }, 100);
+
+        // Live Periodic Audio Chunk Transcriber (fallback if Web Speech is silent after 4s)
+        clearInterval(chunkIntervalRef.current);
+        chunkIntervalRef.current = setInterval(async () => {
+          if (!audioRecorderRef.current || !hasSpokenRef.current) return;
+          if (!answerTextRef.current?.trim() && audioRecorderRef.current.totalSamples > 32000) {
+            const currentBlob = audioRecorderRef.current.getWavBlob(false);
+            if (currentBlob && currentBlob.size > 4000) {
+              const liveText = await transcribeAudioBlob(currentBlob);
+              if (liveText) {
+                setAnswerText(liveText);
+                answerTextRef.current = liveText;
+                triggerPartialAnalysis(liveText, currentQuestion, session);
+              }
+            }
+          }
+        }, 4000);
+
+      } catch (err) {
+        console.error('[AudioRecorder] Microphone access error:', err);
+        // Fallback to WebSpeech if AudioContext is blocked
+        initSpeechRecognition();
+        setIsListening(true);
+        setSpeechTimer(0);
+        timerIntervalRef.current = setInterval(() => setSpeechTimer(prev => prev + 1), 1000);
+      }
+    }
+  };
+
+  const handleAnswerSubmit = async () => {
+    // If currently recording, stop and transcribe remaining audio first
+    if (isListening) {
+      setIsListening(false);
+      clearInterval(timerIntervalRef.current);
+      clearInterval(chunkIntervalRef.current);
+      clearInterval(vadIntervalRef.current);
+      setSilenceCountdown(null);
+
+      if (recognitionRef.current) {
+        recognitionRef.current._shouldListen = false;
+        try { recognitionRef.current.stop(); } catch (_) {}
+      }
+
+      if (audioRecorderRef.current) {
+        const wavBlob = audioRecorderRef.current.stop();
+        if (wavBlob && wavBlob.size > 2000) {
+          const transcript = await transcribeAudioBlob(wavBlob);
+          if (transcript) {
+            const updated = answerText ? `${answerText} ${transcript}`.trim() : transcript;
+            setAnswerText(updated);
+            answerTextRef.current = updated;
+          }
+        }
+      }
+      setLiveCaption('');
+      setMicVolume(0);
+    }
+
+    // Brief delay to ensure state update
+    await new Promise(r => setTimeout(r, 120));
+    await submitAnswerCore();
+  };
+
 
   const handleFinishInterview = async () => {
     setLoading(true);
@@ -933,7 +1176,7 @@ export default function InterviewRoom() {
             {/* Camera Controls */}
             <div className="flex items-center justify-center gap-3">
               <button onClick={() => setCameraActive(c => !c)}
-                className="w-12 h-12 rounded-full flex items-center justify-center transition-all"
+                className="w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105"
                 style={{
                   background: !cameraActive ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.07)',
                   border: !cameraActive ? '1px solid rgba(239,68,68,0.4)' : '1px solid rgba(255,255,255,0.12)',
@@ -941,18 +1184,39 @@ export default function InterviewRoom() {
                 }}>
                 {cameraActive ? <Video size={18} /> : <VideoOff size={18} />}
               </button>
+
+              {/* Central Mic / Recording Button */}
               <button onClick={toggleListening}
-                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${isListening ? 'mic-pulse' : ''}`}
+                disabled={isTranscribing}
+                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all hover:scale-105 ${isListening ? 'mic-pulse' : ''}`}
                 style={{
-                  background: isListening ? 'rgba(239,68,68,0.2)' : 'linear-gradient(135deg, #3B82F6, #8B5CF6)',
-                  border: isListening ? '2px solid rgba(239,68,68,0.6)' : '2px solid transparent',
-                  boxShadow: isListening ? '0 0 20px rgba(239,68,68,0.4)' : '0 4px 20px rgba(99,102,241,0.4)',
+                  background: isListening 
+                    ? 'rgba(239,68,68,0.25)' 
+                    : isTranscribing 
+                      ? 'rgba(99,102,241,0.25)' 
+                      : 'linear-gradient(135deg, #3B82F6, #8B5CF6)',
+                  border: isListening 
+                    ? '2px solid rgba(239,68,68,0.7)' 
+                    : isTranscribing 
+                      ? '2px solid rgba(99,102,241,0.7)' 
+                      : '2px solid transparent',
+                  boxShadow: isListening 
+                    ? `0 0 ${20 + Math.min(micVolume, 30)}px rgba(239,68,68,0.6)` 
+                    : '0 4px 20px rgba(99,102,241,0.4)',
                   color: 'white',
-                }}>
-                {isListening ? <Square size={20} /> : <Mic size={20} />}
+                }}
+                title={isListening ? 'Stop Recording & Transcribe' : isTranscribing ? 'Transcribing...' : 'Click to Speak'}>
+                {isTranscribing ? (
+                  <Loader2 size={22} className="animate-spin text-indigo-400" />
+                ) : isListening ? (
+                  <Square size={20} className="text-red-400" />
+                ) : (
+                  <Mic size={22} />
+                )}
               </button>
+
               <button onClick={() => setMicActive(m => !m)}
-                className="w-12 h-12 rounded-full flex items-center justify-center transition-all"
+                className="w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105"
                 style={{
                   background: !micActive ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.07)',
                   border: !micActive ? '1px solid rgba(239,68,68,0.4)' : '1px solid rgba(255,255,255,0.12)',
@@ -1030,33 +1294,107 @@ export default function InterviewRoom() {
               </div>
             </div>
 
-            {/* ── Live Captions Panel ── */}
-            {isListening && (
-              <div className="rounded-2xl p-4 transition-all"
-                style={{ background: 'rgba(8,12,24,0.95)', border: '1px solid rgba(139,92,246,0.35)', boxShadow: '0 0 20px rgba(139,92,246,0.12)' }}>
+            {/* ── Live Captions & Sarvam AI STT Status Panel ── */}
+            {(isListening || isTranscribing) && (
+              <div className="rounded-2xl p-4 transition-all animate-fade-in"
+                style={{
+                  background: 'rgba(8,12,24,0.95)',
+                  border: isTranscribing ? '1px solid rgba(99,102,241,0.5)' : '1px solid rgba(139,92,246,0.35)',
+                  boxShadow: isTranscribing ? '0 0 25px rgba(99,102,241,0.2)' : '0 0 20px rgba(139,92,246,0.12)'
+                }}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#EF4444' }} />
-                    <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#A78BFA' }}>Live Transcription</span>
+                    {isListening ? (
+                      <div className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ background: '#EF4444' }} />
+                    ) : (
+                      <Loader2 size={12} className="animate-spin text-indigo-400" />
+                    )}
+                    <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: isListening ? '#FCA5A5' : '#A78BFA' }}>
+                      {isListening ? 'Recording Speech' : 'Transcribing Speech'}
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px] font-medium text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
+                      <Sparkles size={10} className="text-indigo-400" /> Sarvam AI (saaras:v3)
+                    </span>
                   </div>
-                  <span className="text-[10px] font-semibold" style={{ color: '#475569' }}>
-                    {speechTimer > 5 ? `${Math.round((answerText.trim().split(/\s+/).filter(Boolean).length / speechTimer) * 60)} WPM` : 'Listening...'}
-                  </span>
+                  
+                  {/* Live Volume / Speech Metrics */}
+                  <div className="flex items-center gap-2">
+                    {isListening && (
+                      <div className="flex items-center gap-0.5 h-3">
+                        {[1, 2, 3, 4, 5].map((bar) => {
+                          const height = Math.max(3, Math.min(12, Math.round((micVolume / 100) * 12 * (bar * 0.4))));
+                          return (
+                            <div key={bar} className="w-1 bg-indigo-500 rounded-full transition-all duration-75"
+                              style={{ height: `${height}px`, opacity: micVolume > bar * 10 ? 1 : 0.3 }} />
+                          );
+                        })}
+                      </div>
+                    )}
+                    <span className="text-[10px] font-semibold text-slate-400">
+                      {isTranscribing ? 'Processing...' : speechTimer > 5 ? `${Math.round((answerText.trim().split(/\s+/).filter(Boolean).length / speechTimer) * 60)} WPM (${speechTimer}s)` : `${speechTimer}s`}
+                    </span>
+                  </div>
                 </div>
-                <div className="min-h-[40px] text-sm leading-relaxed" style={{ color: '#CBD5E1' }}>
-                  {answerText.slice(-200)}
-                  {liveCaption && (
-                    <span style={{ color: '#94A3B8' }}>
-                      {answerText ? ' ' : ''}{liveCaption}
-                      <span className="inline-block w-0.5 h-4 ml-0.5 align-middle animate-pulse" style={{ background: '#8B5CF6' }} />
+
+                <div className="min-h-[36px] text-sm leading-relaxed" style={{ color: '#CBD5E1' }}>
+                  {isTranscribing ? (
+                    <div className="flex items-center gap-2 text-indigo-300 italic text-xs py-1">
+                      <Loader2 size={14} className="animate-spin text-indigo-400" />
+                      Sarvam AI saaras:v3 is converting audio to text...
+                    </div>
+                  ) : liveCaption ? (
+                    <span style={{ color: '#E2E8F0' }}>
+                      {liveCaption}
+                      <span className="inline-block w-1.5 h-4 ml-1 align-middle animate-pulse" style={{ background: '#8B5CF6' }} />
+                    </span>
+                  ) : answerText.trim() ? (
+                    <span style={{ color: '#E2E8F0' }}>
+                      {answerText}
+                      <span className="inline-block w-1.5 h-4 ml-1 align-middle animate-pulse" style={{ background: '#10B981' }} />
+                    </span>
+                  ) : (
+                    <span className="text-slate-500 italic text-xs">
+                      🎤 Speak now — speak clearly into your mic. When you pause for 3–4 seconds, your answer will automatically send!
                     </span>
                   )}
-                  {!answerText && !liveCaption && (
-                    <span className="text-slate-600 italic">Speak now — your words will appear here...</span>
-                  )}
                 </div>
+
+                {/* ── Silence / Auto-Submit Countdown Bar ── */}
+                {silenceCountdown !== null && (
+                  <div className="mt-2.5 p-2.5 rounded-xl border flex items-center justify-between transition-all animate-fade-in"
+                    style={{
+                      background: silenceCountdown === 0 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                      borderColor: silenceCountdown === 0 ? 'rgba(16,185,129,0.4)' : 'rgba(245,158,11,0.4)',
+                    }}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{silenceCountdown === 0 ? '🚀' : '⏸️'}</span>
+                      <div>
+                        <p className="text-xs font-bold" style={{ color: silenceCountdown === 0 ? '#6EE7B7' : '#FCD34D' }}>
+                          {silenceCountdown === 0 
+                            ? 'Sending response & loading next question...' 
+                            : `Pause detected — sending reply in ${silenceCountdown}s`}
+                        </p>
+                        {silenceCountdown > 0 && (
+                          <p className="text-[10px] text-slate-400">Keep speaking to continue your answer</p>
+                        )}
+                      </div>
+                    </div>
+                    {silenceCountdown > 0 && (
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shadow-sm"
+                        style={{
+                          background: 'rgba(245,158,11,0.25)',
+                          color: '#FCD34D',
+                          border: '2px solid rgba(245,158,11,0.6)'
+                        }}>
+                        {silenceCountdown}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+
+
 
             {/* Answer Input */}
             <div className="rounded-2xl p-4" style={{ background: 'rgba(13,18,32,0.9)', border: `1px solid ${isListening ? 'rgba(139,92,246,0.4)' : 'rgba(255,255,255,0.07)'}`, transition: 'border-color 0.3s' }}>

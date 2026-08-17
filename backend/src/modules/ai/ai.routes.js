@@ -6,40 +6,84 @@
 
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const authMiddleware = require('../../middleware/authMiddleware');
+const { validate, schemas } = require('../../utils/validate');
 const { callOpenRouter, MODELS } = require('../../services/ai/openrouter');
 const { generateInterviewQuestions } = require('../../services/ai/interviewAgent');
 const { analyzeResume, analyzeJobDescription } = require('../../services/ai/resumeAnalyzer');
 const { evaluateAnswer, reviewCode } = require('../../services/ai/scoringEngine');
 const { generatePerformanceFeedback } = require('../../services/ai/feedbackEngine');
-const { query } = require('../../config/pgDb');
-const { requirePlan } = require('../../middleware/planMiddleware');
+const { transcribeAudio } = require('../../services/stt/sarvamSTT');
+
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+});
 
 router.use(authMiddleware);
 
 /**
+ * POST /api/ai/transcribe
+ * Transcribes spoken audio from mock interviews using Sarvam AI saaras:v3
+ */
+router.post('/transcribe', upload.any(), async (req, res) => {
+  try {
+    const file = req.files?.[0] || req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ message: 'No audio file provided' });
+    }
+
+    const { model, mode, language_code } = req.body || {};
+    const result = await transcribeAudio(file.buffer, {
+      filename: file.originalname || 'speech.wav',
+      mimeType: file.mimetype || 'audio/wav',
+      model: model || 'saaras:v3',
+      mode: mode || 'transcribe',
+      language_code: language_code || 'en-IN',
+    });
+
+    return res.status(200).json({
+      success: true,
+      transcript: result.transcript,
+      language_code: result.language_code,
+      request_id: result.request_id,
+      language_probability: result.language_probability,
+    });
+  } catch (err) {
+    global.logger?.error({ err }, 'Sarvam STT transcribe error');
+    return res.status(500).json({
+      success: false,
+      message: 'Speech transcription failed. Please try again.',
+      transcript: '',
+    });
+  }
+});
+
+
+
+/**
  * POST /api/ai/evaluate-answer
  */
-router.post('/evaluate-answer', async (req, res) => {
+router.post('/evaluate-answer', validate(schemas.ai.evaluateAnswer), async (req, res) => {
   try {
     const { question, answer, type, role } = req.body;
-    if (!question || !answer) {
-      return res.status(400).json({ message: 'Question and answer are required' });
-    }
     const evaluation = await evaluateAnswer(
       question, answer, type || 'Technical', role || 'Software Engineer'
     );
     return res.status(200).json({ evaluation });
   } catch (err) {
-    console.error('AI evaluate-answer error:', err.message);
-    return res.status(500).json({ message: 'AI evaluation failed', error: err.message });
+    global.logger?.error({ err }, 'AI evaluate-answer error');
+    return res.status(500).json({ message: 'AI evaluation failed. Please try again.' });
   }
 });
+
 
 /**
  * POST /api/ai/review-code
  */
-router.post('/review-code', requirePlan('pro'), async (req, res) => {
+router.post('/review-code', async (req, res) => {
   try {
     const { code, language, challengeTitle, challengeDesc, allPassed } = req.body;
     if (!code || !language) {
@@ -53,97 +97,63 @@ router.post('/review-code', requirePlan('pro'), async (req, res) => {
     );
     return res.status(200).json({ review });
   } catch (err) {
-    console.error('AI review-code error:', err.message);
-    return res.status(500).json({ message: 'AI code review failed', error: err.message });
+    global.logger?.error({ err }, 'AI review-code error');
+    return res.status(500).json({ message: 'AI code review failed. Please try again.' });
   }
 });
 
+
 /**
  * POST /api/ai/generate-questions
- * HR type: free | Technical/Behavioral/Coding type: pro
  */
-router.post('/generate-questions', async (req, res) => {
+router.post('/generate-questions', validate(schemas.ai.generateQuestions), async (req, res) => {
   try {
     const { type, difficulty, role, company, language, resumeText } = req.body;
-    if (!type || !role) {
-      return res.status(400).json({ message: 'Type and role are required' });
-    }
-
-    // HR questions are free; all other types require Pro
-    // Use planMiddleware inline to support per-type gating cleanly
-    if (type.toUpperCase() !== 'HR') {
-      const uResult = await query(
-        'SELECT plan, plan_expires_at FROM users WHERE id = $1',
-        [req.user.userId]
-      );
-      const dbUser = uResult.rows[0];
-      let userPlan = dbUser?.plan || 'free';
-
-      // Enforce expiry
-      if (userPlan !== 'free' && dbUser?.plan_expires_at) {
-        if (new Date(dbUser.plan_expires_at) < new Date()) {
-          await query("UPDATE users SET plan = 'free' WHERE id = $1", [req.user.userId]).catch(() => {});
-          userPlan = 'free';
-        }
-      }
-
-      if ((PLAN_LEVEL[userPlan] ?? 0) < PLAN_LEVEL['pro']) {
-        return res.status(403).json({
-          message: 'Upgrade to Pro to generate Technical, Behavioral, or Coding questions.',
-          requiredPlan: 'pro',
-          userPlan,
-          upgradeUrl: '/pricing',
-        });
-      }
-    }
-
     const questions = await generateInterviewQuestions(
       type, difficulty || 'Medium', role, company || 'Common', language || 'General', resumeText || ''
     );
     return res.status(200).json({ questions });
   } catch (err) {
-    console.error('AI generate-questions error:', err.message);
-    return res.status(500).json({ message: 'Question generation failed', error: err.message });
+    global.logger?.error({ err }, 'AI generate-questions error');
+    return res.status(500).json({ message: 'Question generation failed. Please try again.' });
   }
 });
+
 
 
 /**
  * POST /api/ai/analyze-jd
  */
-router.post('/analyze-jd', requirePlan('pro'), async (req, res) => {
+router.post('/analyze-jd', validate(schemas.ai.analyzeJd), async (req, res) => {
   try {
     const { jobDescription } = req.body;
-    if (!jobDescription) {
-      return res.status(400).json({ message: 'Job description text is required' });
-    }
     const analysis = await analyzeJobDescription(jobDescription);
     return res.status(200).json({ analysis });
   } catch (err) {
-    console.error('AI analyze-jd error:', err.message);
-    return res.status(500).json({ message: 'JD analysis failed', error: err.message });
+    global.logger?.error({ err }, 'AI analyze-jd error');
+    return res.status(500).json({ message: 'Job description analysis failed. Please try again.' });
   }
 });
+
 
 /**
  * POST /api/ai/analyze-resume
  */
-router.post('/analyze-resume', requirePlan('pro'), async (req, res) => {
+router.post('/analyze-resume', validate(schemas.ai.analyzeResume), async (req, res) => {
   try {
     const { resumeText, targetRole } = req.body;
-    if (!resumeText) {
-      return res.status(400).json({ message: 'Resume text is required' });
-    }
     const analysis = await analyzeResume(
       resumeText,
       targetRole || 'Software Engineer'
     );
     return res.status(200).json({ analysis });
   } catch (err) {
-    console.error('AI analyze-resume error:', err.message);
-    return res.status(500).json({ message: 'Resume analysis failed', error: err.message });
+    global.logger?.error({ err }, 'AI analyze-resume error');
+    return res.status(500).json({ message: 'Resume analysis failed. Please try again.' });
   }
 });
+
+
 
 /**
  * POST /api/ai/performance-feedback
@@ -159,10 +169,11 @@ router.post('/performance-feedback', async (req, res) => {
     );
     return res.status(200).json({ feedback });
   } catch (err) {
-    console.error('AI performance-feedback error:', err.message);
-    return res.status(500).json({ message: 'Performance feedback generation failed', error: err.message });
+    global.logger?.error({ err }, 'AI performance-feedback error');
+    return res.status(500).json({ message: 'Performance feedback generation failed. Please try again.' });
   }
 });
+
 
 /**
  * GET /api/ai/status
@@ -183,8 +194,10 @@ router.get('/status', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (err) {
-    return res.status(200).json({ status: 'error', error: err.message });
+    global.logger?.error({ err }, 'AI status check failed');
+    return res.status(200).json({ status: 'error' });
   }
 });
+
 
 module.exports = router;

@@ -120,10 +120,10 @@ async function apiFetch(endpoint, options = {}, isRetry = false) {
   return responseData;
 }
 
-// ── HTTP helpers ──────────────────────────────────────────────────────────────
 export const apiGet    = (endpoint)        => apiFetch(endpoint, { method: 'GET' });
 export const apiPost   = (endpoint, body)  => apiFetch(endpoint, { method: 'POST',   body: JSON.stringify(body) });
 export const apiPut    = (endpoint, body)  => apiFetch(endpoint, { method: 'PUT',    body: JSON.stringify(body) });
+export const apiPatch  = (endpoint, body)  => apiFetch(endpoint, { method: 'PATCH',  body: JSON.stringify(body) });
 export const apiDelete = (endpoint)        => apiFetch(endpoint, { method: 'DELETE' });
 
 /**
@@ -132,10 +132,8 @@ export const apiDelete = (endpoint)        => apiFetch(endpoint, { method: 'DELE
  */
 export const apiUpload = (endpoint, formData) => {
   const url = `${API_BASE}${endpoint}`;
-  const headers = {};
-  if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`;
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (timezone) headers['X-Timezone'] = timezone;
+  const headers = buildHeaders();
+  delete headers['Content-Type'];
 
   return fetch(url, {
     method: 'POST',

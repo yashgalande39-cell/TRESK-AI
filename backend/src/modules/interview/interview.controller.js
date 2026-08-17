@@ -9,6 +9,16 @@ const { query, withTransaction } = require('../../config/pgDb');
 const { generateInterviewQuestions, generateFollowUp } = require('../../services/ai/interviewAgent');
 const { evaluateAnswer } = require('../../services/ai/scoringEngine');
 const { generatePerformanceFeedback } = require('../../services/ai/feedbackEngine');
+const { addEvaluationJob, getJobStatus: checkJobStatus } = require('../../queues/aiQueue');
+const { cachedQuery, DEFAULT_TTLS } = require('../../services/cache/redisCache');
+
+// Structured Logger reference (Pino via global.logger with console fallback)
+const logger = {
+  info:  (...args) => (global.logger ? global.logger.info(...args)  : console.log(...args)),
+  warn:  (...args) => (global.logger ? global.logger.warn(...args)  : console.warn(...args)),
+  error: (...args) => (global.logger ? global.logger.error(...args) : console.error(...args)),
+  debug: (...args) => (global.logger ? global.logger.debug(...args) : console.log(...args)),
+};
 
 // In-memory fallback for active sessions when PostgreSQL is offline
 const offlineSessions = new Map();
@@ -72,11 +82,11 @@ const generateAIQuestions = async (type, difficulty, role, company, language, re
   try {
     const questions = await generateInterviewQuestions(type, difficulty, role, company, language, resumeText);
     if (Array.isArray(questions) && questions.length >= 3) {
-      console.log(`✅ OpenRouter generated ${questions.length} ${type} questions for ${role}`);
+      logger.info({ count: questions.length, type, role }, `✅ OpenRouter generated ${questions.length} ${type} questions for ${role}`);
       return questions;
     }
   } catch (e) {
-    console.warn('OpenRouter question generation failed, trying Gemini fallback:', e.message);
+    logger.warn({ err: e.message }, 'OpenRouter question generation failed, trying Gemini fallback');
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -100,7 +110,7 @@ const generateAIQuestions = async (type, difficulty, role, company, language, re
         return JSON.parse(cleanedText);
       }
     } catch (e) {
-      console.warn('Gemini fallback also failed, using rule-based synthesizer:', e.message);
+      logger.warn({ err: e.message }, 'Gemini fallback also failed, using rule-based synthesizer');
     }
   }
 
@@ -145,7 +155,7 @@ const generateAIQuestions = async (type, difficulty, role, company, language, re
         return qResult.rows.map(row => row.question);
       }
     } catch (e) {
-      console.warn('DB query for fallback questions failed:', e.message);
+      logger.warn({ err: e.message }, 'DB query for fallback questions failed');
     }
 
     questions.push(
@@ -190,22 +200,31 @@ exports.generateSession = async (req, res) => {
           }
           resumeObj = {
             id: row.id,
-            name: analysisData.name || "Rahul Kumar",
-            role: row.target_role,
+            name: analysisData.name || "Candidate",
+            role: row.target_role || role,
             skills: analysisData.skills || row.keywords || [],
             projects: analysisData.projects || [],
             experience: analysisData.experience || [],
             education: analysisData.education || [],
-            text: row.raw_text
+            text: row.raw_text || ""
           };
-          resumeText = row.raw_text;
+          
+          resumeText = row.raw_text || "";
+          if (!resumeText || resumeText.length < 60) {
+            const skillsStr = (resumeObj.skills || []).join(', ');
+            const projStr = (resumeObj.projects || []).map(p => `${p.title || 'Project'}: ${p.desc || p.tech || ''}`).join('; ');
+            const expStr = (resumeObj.experience || []).map(e => `${e.company || 'Company'} (${e.role || 'Role'}): ${e.desc || ''}`).join('; ');
+            const eduStr = (resumeObj.education || []).map(ed => `${ed.school || 'University'} - ${ed.degree || 'Degree'}`).join('; ');
+            resumeText = `Candidate Name: ${resumeObj.name}\nTarget Role: ${resumeObj.role}\nSkills: ${skillsStr}\nProjects: ${projStr}\nWork Experience: ${expStr}\nEducation: ${eduStr}`;
+          }
         }
       } catch (e) {
-        console.warn("Database offline during resume retrieval, skipping resume context:", e.message);
+        logger.warn({ err: e.message }, "Database offline during resume retrieval, skipping resume context");
       }
     }
 
-    console.log(`Generating a ${difficulty} ${type} session for role: ${role} at ${company || 'Common'}`);
+
+    logger.info({ difficulty, type, role, company: company || 'Common' }, `Generating a ${difficulty} ${type} session for role: ${role} at ${company || 'Common'}`);
     
     // Generate questions
     let questions = [];
@@ -225,7 +244,7 @@ exports.generateSession = async (req, res) => {
           }));
         }
       } catch (dbErr) {
-        console.warn('DB query for coding questions failed:', dbErr.message);
+        logger.warn({ err: dbErr.message }, 'DB query for coding questions failed');
       }
       if (questions.length === 0) {
         // Fallback to json questions
@@ -290,7 +309,7 @@ exports.generateSession = async (req, res) => {
         };
         offlineSessions.set(session.id, session);
       } else {
-        console.error('[generateSession] Database error:', dbErr);
+        logger.error({ err: dbErr }, '[generateSession] Database error');
         return res.status(503).json({ message: "Service temporarily unavailable" });
       }
     }
@@ -327,7 +346,7 @@ exports.generateSession = async (req, res) => {
         session: mockSession
       });
     }
-    console.error('[generateSession] Overall error:', err);
+    logger.error({ err }, '[generateSession] Overall error');
     return res.status(503).json({ message: "Service temporarily unavailable" });
   }
 };
@@ -368,7 +387,7 @@ exports.submitAnswer = async (req, res) => {
           }
         }
       } catch (dbErr) {
-        console.warn("Database offline during submitAnswer query, using offline fallback mode:", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during submitAnswer query, using offline fallback mode");
         usingFallback = true;
       }
     }
@@ -470,9 +489,9 @@ exports.submitAnswer = async (req, res) => {
         dbSession.type,
         dbSession.role || 'Software Engineer'
       );
-      console.log(`✅ AI evaluated answer with score: ${aiEvaluation.overallScore}`);
+      logger.info({ score: aiEvaluation.overallScore }, `✅ AI evaluated answer with score: ${aiEvaluation.overallScore}`);
     } catch (aiErr) {
-      console.warn('AI answer evaluation unavailable, using metric-based scoring:', aiErr.message);
+      logger.warn({ err: aiErr.message }, 'AI answer evaluation unavailable, using metric-based scoring');
     }
 
     const finalTechnicalAccuracy = aiEvaluation ? aiEvaluation.technicalScore : technicalAccuracy;
@@ -533,8 +552,8 @@ exports.submitAnswer = async (req, res) => {
     }
 
     let updatedQuestions = [...questions];
-    if (!isCompleted && nextDifficulty !== ongoingMetadata.difficulty) {
-      console.log(`⚡ Adaptive AI Triggered: Changing difficulty to: ${nextDifficulty}`);
+    if (!isCompleted && nextDifficulty !== ongoingMetadata.difficulty && !ongoingMetadata.resumeId) {
+      logger.info({ nextDifficulty }, `⚡ Adaptive AI Triggered: Changing difficulty to: ${nextDifficulty}`);
       try {
         const qResult = await query(
           "SELECT question FROM questions WHERE type = $1 AND difficulty = $2 AND is_active = true LIMIT 5",
@@ -545,13 +564,10 @@ exports.submitAnswer = async (req, res) => {
           updatedQuestions[nextIdx] = { id: `adaptive_${nextIdx}`, text: selectedRep };
         }
       } catch (dbErr) {
-        console.warn('Adaptive query failed:', dbErr.message);
+        logger.warn({ err: dbErr.message }, 'Adaptive query failed');
       }
     }
 
-    if (aiFollowUp && !isCompleted) {
-      updatedQuestions[nextIdx] = { id: `ai_followup_${nextIdx}`, text: aiFollowUp };
-    }
 
     // Save back to ongoing metadata
     const updatedMetadata = {
@@ -585,7 +601,7 @@ exports.submitAnswer = async (req, res) => {
           sessionId
         ]);
       } catch (dbErr) {
-        console.warn("Database offline during submitAnswer update:", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during submitAnswer update");
       }
     }
 
@@ -596,7 +612,7 @@ exports.submitAnswer = async (req, res) => {
       nextQuestion: isCompleted ? null : updatedQuestions[nextIdx]
     });
   } catch (err) {
-    console.error("Answer Submission Error:", err);
+    logger.error({ err }, "Answer Submission Error");
     return res.status(500).json({ message: "Failed to evaluate answer" });
   }
 };
@@ -624,7 +640,7 @@ exports.finishSession = async (req, res) => {
           dbSession = sResult.rows[0];
         }
       } catch (dbErr) {
-        console.warn("Database offline during finishSession query, using fallback scorecard:", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during finishSession query, using fallback scorecard");
         usingFallback = true;
       }
     }
@@ -690,7 +706,7 @@ exports.finishSession = async (req, res) => {
           WHERE id = $2
         `, [JSON.stringify(fallbackScore), sessionId]);
       } catch (dbErr) {
-        console.warn("Database offline during finishSession update (no answers):", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during finishSession update (no answers)");
       }
 
       return res.status(200).json({ message: 'Session ended (no answers)', scoreCard: fallbackScore });
@@ -767,9 +783,9 @@ exports.finishSession = async (req, res) => {
     let aiPerformanceFeedback = null;
     try {
       aiPerformanceFeedback = await generatePerformanceFeedback(
-        scoreCard, dbSession.role || 'Software Engineer', dbSession.type || 'technical'
+        scoreCard, dbSession.role || 'Software Engineer', dbSession.type || 'technical', transcriptList
       );
-      console.log(`✅ OpenRouter generated personalized performance feedback`);
+      logger.info('✅ OpenRouter generated personalized performance feedback');
       scoreCard.aiVerdict = aiPerformanceFeedback.overallVerdict;
       scoreCard.aiHiringLikelihood = aiPerformanceFeedback.hiringLikelihood;
       scoreCard.aiPersonalizedFeedback = aiPerformanceFeedback.personalizedFeedback;
@@ -778,7 +794,7 @@ exports.finishSession = async (req, res) => {
       scoreCard.aiStudyPlan = aiPerformanceFeedback.studyPlan;
       scoreCard.aiNextInterviewReady = aiPerformanceFeedback.nextInterviewReady;
     } catch (aiErr) {
-      console.warn('AI performance feedback unavailable:', aiErr.message);
+      logger.warn({ err: aiErr.message }, 'AI performance feedback unavailable');
     }
 
     // Write scorecard metrics to PG columns (score_overall, score_technical, score_communication, score_confidence, score_problem_solving)
@@ -813,7 +829,7 @@ exports.finishSession = async (req, res) => {
           sessionId
         ]);
       } catch (dbErr) {
-        console.warn("Database offline during finishSession update:", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during finishSession update");
       }
     }
 
@@ -843,7 +859,7 @@ exports.finishSession = async (req, res) => {
           }
         });
       } catch (dbErr) {
-        console.warn("Database offline during finishSession XP update:", dbErr.message);
+        logger.warn({ err: dbErr.message }, "Database offline during finishSession XP update");
       }
     }
 
@@ -852,8 +868,53 @@ exports.finishSession = async (req, res) => {
       scoreCard
     });
   } catch (err) {
-    console.error("Session Finish Error:", err);
+    logger.error({ err }, "Session Finish Error");
     return res.status(500).json({ message: "Failed to compile session scorecard" });
+  }
+};
+
+/**
+ * Asynchronously queue session finishing and AI feedback compilation via BullMQ
+ */
+exports.finishSessionAsync = async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const userId = req.user?.userId;
+
+    if (!sessionId) {
+      return res.status(400).json({ message: 'sessionId is required' });
+    }
+
+    // Try enqueueing background evaluation job in BullMQ
+    const jobResult = await addEvaluationJob({ sessionId, userId });
+    if (jobResult) {
+      return res.status(202).json({
+        message: 'Session evaluation queued in background',
+        jobId: jobResult.jobId,
+        status: 'queued',
+        sessionId,
+      });
+    }
+
+    // Fall back to synchronous evaluation if Redis/BullMQ is offline
+    return exports.finishSession(req, res);
+  } catch (err) {
+    logger.warn({ err: err.message }, 'finishSessionAsync failed, falling back to sync finish');
+    return exports.finishSession(req, res);
+  }
+};
+
+/**
+ * Get status of an asynchronous BullMQ AI evaluation job
+ */
+exports.getJobStatus = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const status = await checkJobStatus(jobId);
+    return res.status(200).json(status);
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to check job status');
+    return res.status(500).json({ message: 'Error checking job status' });
   }
 };
 
@@ -890,7 +951,7 @@ exports.getHistory = async (req, res) => {
 
     return res.status(200).json({ history });
   } catch (err) {
-    console.warn("Retrieve History Error, returning mock history fallback:", err.message);
+    logger.warn({ err: err.message }, "Retrieve History Error, returning mock history fallback");
     const mockHistory = [
       {
         id: "sess_mock_1",
@@ -1002,7 +1063,7 @@ exports.getSession = async (req, res) => {
 
     return res.status(200).json({ session });
   } catch (err) {
-    console.warn("Retrieve Session Error, returning mock session details fallback:", err.message);
+    logger.warn({ err: err.message }, "Retrieve Session Error, returning mock session details fallback");
     const mockSession = {
       id: req.params.sessionId || "sess_mock_1",
       userId: req.user.userId,
@@ -1135,7 +1196,7 @@ exports.analyzePartial = async (req, res) => {
         feedbackType,
       });
     } catch (aiErr) {
-      console.warn('[analyzePartial] AI evaluation failed, using heuristic:', aiErr.message);
+      logger.warn({ err: aiErr.message }, '[analyzePartial] AI evaluation failed, using heuristic');
       // Heuristic scoring fallback
       const wpm = wordCount; // rough proxy
       const techScore = Math.min(90, Math.max(20, 30 + (wordCount / 3)));
@@ -1149,7 +1210,7 @@ exports.analyzePartial = async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('[analyzePartial] Error:', err.message);
+    logger.error({ err: err.message }, '[analyzePartial] Error');
     return res.status(500).json({ message: 'Analysis failed', error: err.message });
   }
 };

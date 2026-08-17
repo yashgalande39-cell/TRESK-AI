@@ -11,9 +11,22 @@ const { query, withTransaction } = require('../../config/pgDb');
 const emailService = require('./email.service');
 
 const { JWT_SECRET, IS_DEMO_AUTH, requireDemoMode } = require('../../config/env');
-const FIREBASE_PROJECT_ID = 'ai-interview-auth-530ed';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+if (!FIREBASE_PROJECT_ID) {
+  console.warn('⚠️ WARNING: FIREBASE_PROJECT_ID is not set. Google OAuth via Firebase will be unavailable.');
+}
+
+// ── Structured Logger proxy ────────────────────────────────────────────────────
+const log = {
+  info:  (...a) => (global.logger ? global.logger.info(...a)  : console.log('[INFO]',  ...a)),
+  warn:  (...a) => (global.logger ? global.logger.warn(...a)  : console.warn('[WARN]',  ...a)),
+  error: (...a) => (global.logger ? global.logger.error(...a) : console.error('[ERROR]', ...a)),
+  debug: (...a) => (global.logger ? global.logger.debug?.(...a) : null),
+};
 
 const { computeStreak } = require('../../utils/streak');
+
+
 
 async function updateUserStreak(userId, timeZone = 'UTC', client = null) {
   const q = client ? client.query.bind(client) : query;
@@ -93,7 +106,7 @@ const revokeAllSessions = async (userId) => {
   try {
     await query('DELETE FROM refresh_sessions WHERE user_id = $1', [userId]);
   } catch (e) {
-    console.warn('[revokeAllSessions] Failed:', e.message);
+    log.warn({ err: e }, '[revokeAllSessions] Failed');
   }
 };
 
@@ -183,7 +196,7 @@ exports.register = async (req, res) => {
         user: mockUser
       });
     }
-    console.error('[Register] Database error:', err);
+    log.error({ err }, '[Register] Database error');
     return res.status(503).json({ message: 'Service temporarily unavailable' });
   }
 };
@@ -243,7 +256,7 @@ exports.login = async (req, res) => {
         user: mockUser
       });
     }
-    console.error('[Login] Database error:', err);
+    log.error({ err }, '[Login] Database error');
     return res.status(503).json({ message: 'Service temporarily unavailable' });
   }
 };
@@ -286,7 +299,7 @@ exports.getProfile = async (req, res) => {
       };
       return res.status(200).json({ user: mockUser });
     }
-    console.error('[GetProfile] Database error:', err);
+    log.error({ err }, '[GetProfile] Database error');
     return res.status(503).json({ message: 'Service temporarily unavailable' });
   }
 };
@@ -313,7 +326,7 @@ exports.updateProfile = async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ message: 'User not found' });
     return res.status(200).json({ message: 'Profile updated', user: sanitize(result.rows[0]) });
   } catch (err) {
-    console.error('Update Profile Error:', err);
+    log.error({ err }, 'Update Profile Error');
     return res.status(500).json({ message: 'Server error updating profile' });
   }
 };
@@ -347,7 +360,7 @@ exports.updateXpAndStreak = async (req, res) => {
     }
     return res.status(200).json({ message: 'Progress updated', user: result.user });
   } catch (err) {
-    console.error('XP Update Error:', err);
+    log.error({ err }, 'XP Update Error');
     return res.status(500).json({ message: 'Server error updating progress' });
   }
 };
@@ -366,7 +379,7 @@ exports.updatePlan = async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ message: 'User not found' });
     return res.status(200).json({ message: 'Plan updated', user: sanitize(result.rows[0]) });
   } catch (err) {
-    console.error('Update Plan Error:', err);
+    log.error({ err }, 'Update Plan Error');
     return res.status(500).json({ message: 'Server error updating plan' });
   }
 };
@@ -395,7 +408,7 @@ exports.changePassword = async (req, res) => {
 
     return res.status(200).json({ message: 'Password changed successfully' });
   } catch (err) {
-    console.error('Change Password Error:', err);
+    log.error({ err }, 'Change Password Error');
     return res.status(500).json({ message: 'Server error changing password' });
   }
 };
@@ -413,10 +426,11 @@ async function verifyFirebaseIdToken(idToken) {
   const keys = await getFirebasePublicKeys();
   const publicKey = keys[decoded.header.kid];
   if (!publicKey) throw new Error('Unknown Firebase signing key');
+  const targetProjectId = process.env.FIREBASE_PROJECT_ID || decoded?.payload?.aud || FIREBASE_PROJECT_ID;
   return jwt.verify(idToken, publicKey, {
     algorithms: ['RS256'],
-    audience: FIREBASE_PROJECT_ID,
-    issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`,
+    audience: targetProjectId,
+    issuer: `https://securetoken.google.com/${targetProjectId}`,
   });
 }
 
@@ -447,7 +461,7 @@ exports.googleAuth = async (req, res) => {
           RETURNING *
         `, [name || email.split('@')[0], email, googleId, picture || '']);
         user = result.rows[0];
-        console.log(`✅ New Google user registered: ${email}`);
+        log.info("New Google user registered");
       } else {
         // Returning user — update streak & profile
         const prev = existing.rows[0];
@@ -463,7 +477,7 @@ exports.googleAuth = async (req, res) => {
           user.streak = updatedUser.streak;
           user.last_active = updatedUser.last_active;
         }
-        console.log(`✅ Returning Google user: ${email}`);
+        log.info("Returning Google user");
       }
     } catch (dbErr) {
       if (IS_DEMO_AUTH) {
@@ -483,7 +497,7 @@ exports.googleAuth = async (req, res) => {
           last_active: new Date().toISOString()
         };
       } else {
-        console.error('[GoogleAuth] Database error:', dbErr);
+        log.error({ err: dbErr }, '[GoogleAuth] Database error');
         return res.status(503).json({ message: 'Service temporarily unavailable' });
       }
     }
@@ -529,12 +543,12 @@ exports.forgotPassword = async (req, res) => {
 
     // Fire-and-forget email send (don't await to avoid leaking timing)
     emailService.sendPasswordResetEmail(user.email, user.name, token).catch(err =>
-      console.error('[ForgotPassword] Email send failed:', err.message)
+      log.error({ err }, '[ForgotPassword] Email send failed')
     );
 
     return res.status(200).json({ message: 'If this email exists, a reset link has been sent.' });
   } catch (err) {
-    console.error('[ForgotPassword] Error:', err.message);
+    log.error({ err }, '[ForgotPassword] Error');
     return res.status(200).json({ message: 'If this email exists, a reset link has been sent.' });
   }
 };
@@ -574,7 +588,7 @@ exports.resetPassword = async (req, res) => {
 
     return res.status(200).json({ message: 'Password reset successfully. Please log in again.' });
   } catch (err) {
-    console.error('[ResetPassword] Error:', err.message);
+    log.error({ err }, '[ResetPassword] Error');
     return res.status(500).json({ message: 'Server error resetting password' });
   }
 };
@@ -602,7 +616,7 @@ exports.verifyEmail = async (req, res) => {
 
     return res.status(200).json({ message: 'Email verified successfully!' });
   } catch (err) {
-    console.error('[VerifyEmail] Error:', err.message);
+    log.error({ err }, '[VerifyEmail] Error');
     return res.status(500).json({ message: 'Server error verifying email' });
   }
 };
@@ -626,12 +640,12 @@ exports.resendVerification = async (req, res) => {
     );
 
     emailService.sendVerificationEmail(user.email, user.name, token).catch(err =>
-      console.error('[ResendVerification] Email send failed:', err.message)
+      log.error({ err }, '[ResendVerification] Email send failed')
     );
 
     return res.status(200).json({ message: 'Verification email sent' });
   } catch (err) {
-    console.error('[ResendVerification] Error:', err.message);
+    log.error({ err }, '[ResendVerification] Error');
     return res.status(500).json({ message: 'Server error resending verification' });
   }
 };
@@ -662,7 +676,7 @@ exports.deleteAccount = async (req, res) => {
 
     return res.status(200).json({ message: 'Account permanently deleted. We\'re sorry to see you go.' });
   } catch (err) {
-    console.error('[DeleteAccount] Error:', err.message);
+    log.error({ err }, '[DeleteAccount] Error');
     return res.status(500).json({ message: 'Server error deleting account' });
   }
 };
@@ -700,7 +714,7 @@ exports.refreshToken = async (req, res) => {
 
     return res.status(200).json({ token: newAccessToken });
   } catch (err) {
-    console.error('[RefreshToken] Error:', err.message);
+    log.error({ err }, '[RefreshToken] Error');
     return res.status(500).json({ message: 'Server error refreshing token' });
   }
 };
